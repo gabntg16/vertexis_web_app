@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { useData } from '../../context/DataContext';
 import { CashDenominationCount, ShiftClosingRecord } from '../../types';
+import { generateClientRequestId } from '../../utils/idempotency';
 import {
   Printer,
   X,
@@ -13,6 +14,7 @@ import {
   Building2,
   Calendar,
   Key,
+  Loader2,
 } from 'lucide-react';
 
 interface ZReadingModalProps {
@@ -44,6 +46,8 @@ export const ZReadingModal: React.FC<ZReadingModalProps> = ({ onClose, onZReadin
   const summary = getXReadingSummary(currentBranch?.id);
 
   // Form State
+  const [clientRequestId] = useState<string>(() => generateClientRequestId('req_z_reading'));
+  const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [counts, setCounts] = useState<Record<number, number>>({
     1000: 0,
     500: 0,
@@ -60,6 +64,8 @@ export const ZReadingModal: React.FC<ZReadingModalProps> = ({ onClose, onZReadin
   const [managerName, setManagerName] = useState('Store Manager');
   const [managerPin, setManagerPin] = useState('');
   const [closingNotes, setClosingNotes] = useState('');
+  const [manualBookletSeries, setManualBookletSeries] = useState('Booklet #04 (OR #001250 - #001278)');
+  const [manualBookletTotal, setManualBookletTotal] = useState<number>(summary.netSales);
   const [generatedRecord, setGeneratedRecord] = useState<ShiftClosingRecord | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -71,6 +77,7 @@ export const ZReadingModal: React.FC<ZReadingModalProps> = ({ onClose, onZReadin
   }, [counts]);
 
   const cashVariance = actualCashCalculated - summary.expectedCash;
+  const isBookletMatched = manualBookletTotal === summary.netSales;
 
   const handleDenomChange = (denom: number, val: string) => {
     const qty = parseInt(val, 10) || 0;
@@ -101,6 +108,7 @@ export const ZReadingModal: React.FC<ZReadingModalProps> = ({ onClose, onZReadin
   };
 
   const handleCloseShift = () => {
+    if (isSubmitting) return;
     setErrorMsg(null);
     const validPins = ['1234', '8888', '9999', 'admin123', 'branch123', '0000'];
     if (!managerPin || !validPins.includes(managerPin.trim())) {
@@ -113,6 +121,7 @@ export const ZReadingModal: React.FC<ZReadingModalProps> = ({ onClose, onZReadin
       return;
     }
 
+    setIsSubmitting(true);
     try {
       const breakdownPayload: CashDenominationCount[] = Object.entries(counts)
         .map(([denom, count]) => ({
@@ -127,7 +136,11 @@ export const ZReadingModal: React.FC<ZReadingModalProps> = ({ onClose, onZReadin
         managerApprovedBy: managerName,
         actualCash: actualCashCalculated,
         cashBreakdown: breakdownPayload,
+        manualBookletSeries: manualBookletSeries.trim(),
+        manualBookletTotal,
+        manualBookletMatched: isBookletMatched,
         notes: closingNotes,
+        clientRequestId,
       });
 
       setGeneratedRecord(record);
@@ -136,6 +149,8 @@ export const ZReadingModal: React.FC<ZReadingModalProps> = ({ onClose, onZReadin
       }
     } catch (err: any) {
       setErrorMsg(err.message || 'Failed to generate Z-Reading closing');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -155,10 +170,10 @@ export const ZReadingModal: React.FC<ZReadingModalProps> = ({ onClose, onZReadin
             </div>
             <div>
               <h3 className="text-sm font-semibold">
-                End-of-Day Z-Reading Closing
+                End-of-Day Shift Settlement & Manual Booklet Reconciliation
               </h3>
               <p className="text-xs text-neutral-400">
-                Official BIR Daily Shift Settlement & Cash Float Reconciliation
+                Daily Counter Sales Settlement, Cash Float Count, & Manual Receipt Booklet Cross-Matching
               </p>
             </div>
           </div>
@@ -177,6 +192,17 @@ export const ZReadingModal: React.FC<ZReadingModalProps> = ({ onClose, onZReadin
                PRINTABLE Z-READING SLIP PREVIEW
                ========================================================================= */
             <div className="font-mono text-[13px] leading-relaxed text-neutral-800 dark:text-neutral-200 print:text-black print:p-2">
+              
+              {/* Prominent Non-OR Warning Banner */}
+              <div className="mb-3 p-2 bg-amber-50 dark:bg-amber-950/40 border-2 border-dashed border-amber-400 dark:border-amber-600 rounded-lg text-center print:border-black print:bg-neutral-100">
+                <p className="text-[11px] font-black tracking-wider text-amber-900 dark:text-amber-300 print:text-black uppercase">
+                  *** THIS IS NOT AN OFFICIAL RECEIPT ***
+                </p>
+                <p className="text-[9.5px] font-sans font-medium text-amber-800 dark:text-amber-400 print:text-black">
+                  Internal Shift Settlement & Manual Receipt Booklet Audit Slip
+                </p>
+              </div>
+
               <div className="text-center space-y-1 pb-4 border-b border-dashed border-neutral-300 dark:border-neutral-700 print:border-black">
                 <h1 className="text-base font-bold text-neutral-900 dark:text-white print:text-black">
                   THE MARSH BITES
@@ -184,17 +210,17 @@ export const ZReadingModal: React.FC<ZReadingModalProps> = ({ onClose, onZReadin
                 <p className="text-xs font-semibold">{generatedRecord.branchName}</p>
                 <p className="text-[11px] text-neutral-500">{currentBranch?.location}</p>
                 <div className="pt-2 text-xs font-bold text-red-600 dark:text-red-400 uppercase tracking-widest print:text-black">
-                  *** OFFICIAL Z-READING REPORT ***
+                  *** DAILY SHIFT CLOSING REPORT ***
                 </div>
                 <p className="text-[10px] text-neutral-400">
-                  (DAILY AUDIT SLIP — RESETTABLE COUNTER CLOSED)
+                  (COUNTER TERMINAL SETTLEMENT & BOOKLET RECONCILIATION)
                 </p>
               </div>
 
               {/* Meta */}
               <div className="py-3 border-b border-dashed border-neutral-300 dark:border-neutral-700 text-xs space-y-1 print:border-black">
                 <div className="flex justify-between">
-                  <span className="text-neutral-500">Z-Report No:</span>
+                  <span className="text-neutral-500">Closing Report No:</span>
                   <span className="font-bold text-neutral-900 dark:text-neutral-100 print:text-black">
                     {generatedRecord.zReadingNumber}
                   </span>
@@ -213,18 +239,18 @@ export const ZReadingModal: React.FC<ZReadingModalProps> = ({ onClose, onZReadin
                 </div>
               </div>
 
-              {/* OR Sequence Ranges */}
+              {/* Slip Sequence Ranges */}
               <div className="py-3 border-b border-dashed border-neutral-300 dark:border-neutral-700 text-xs space-y-1 print:border-black">
                 <div className="flex justify-between">
-                  <span className="text-neutral-500">Beginning OR No:</span>
+                  <span className="text-neutral-500">Beginning Slip Ref:</span>
                   <span className="font-semibold">{generatedRecord.beginningReceiptNo}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-neutral-500">Ending OR No:</span>
+                  <span className="text-neutral-500">Ending Slip Ref:</span>
                   <span className="font-semibold">{generatedRecord.endingReceiptNo}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-neutral-500">Total Valid Receipts:</span>
+                  <span className="text-neutral-500">Total Terminal Orders:</span>
                   <span className="font-bold">{generatedRecord.totalTransactions}</span>
                 </div>
               </div>
@@ -240,19 +266,40 @@ export const ZReadingModal: React.FC<ZReadingModalProps> = ({ onClose, onZReadin
                   <span>-₱{generatedRecord.totalDiscounts.toLocaleString()}</span>
                 </div>
                 <div className="flex justify-between text-sm font-bold pt-1 text-neutral-900 dark:text-neutral-100 print:text-black">
-                  <span>NET SALES TODAY:</span>
+                  <span>NET SALES TODAY (PHP):</span>
                   <span>₱{generatedRecord.totalNetSales.toLocaleString()}</span>
                 </div>
               </div>
 
-              {/* VAT Statutory Breakdown */}
+              {/* Manual Booklet Reconciliation Block */}
+              <div className="py-3 border-b border-dashed border-neutral-300 dark:border-neutral-700 text-xs space-y-1 bg-neutral-50 dark:bg-neutral-800/40 p-2.5 rounded print:bg-neutral-100 print:border-black">
+                <div className="font-bold text-neutral-900 dark:text-white print:text-black">
+                  Physical Manual Booklet Reconciliation:
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-neutral-500">Manual Booklet Series:</span>
+                  <span className="font-semibold">{generatedRecord.manualBookletSeries || 'Booklet #04 (OR #001250 - #001278)'}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-neutral-500">Manual Booklet Sales Total:</span>
+                  <span className="font-bold">₱{(generatedRecord.manualBookletTotal ?? generatedRecord.totalNetSales).toLocaleString()}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-neutral-500">Booklet vs Terminal Match:</span>
+                  <span className="font-bold text-emerald-600 dark:text-emerald-400 print:text-black">
+                    {generatedRecord.manualBookletMatched ? '✓ EXACT MATCH (BALANCED)' : 'RECONCILED'}
+                  </span>
+                </div>
+              </div>
+
+              {/* VAT Breakdown */}
               <div className="py-3 border-b border-dashed border-neutral-300 dark:border-neutral-700 text-[11px] space-y-1 text-neutral-600 dark:text-neutral-400 print:text-black">
                 <div className="flex justify-between">
                   <span>VATable Sales (12%):</span>
                   <span>₱{generatedRecord.totalVatableSales.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span>12% VAT Collected:</span>
+                  <span>12% VAT Amount:</span>
                   <span>₱{generatedRecord.totalVatAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                 </div>
                 <div className="flex justify-between">
@@ -333,8 +380,18 @@ export const ZReadingModal: React.FC<ZReadingModalProps> = ({ onClose, onZReadin
                 </div>
               </div>
 
+              {/* Statutory Disclaimer Box on Slip */}
+              <div className="my-3 p-2.5 border-t border-b border-dashed border-neutral-300 dark:border-neutral-700 print:border-black text-center space-y-1">
+                <p className="font-bold text-[10px] text-red-600 dark:text-red-400 print:text-black uppercase">
+                  *** THIS IS NOT AN OFFICIAL RECEIPT ***
+                </p>
+                <p className="text-[9px] text-neutral-500 dark:text-neutral-400 print:text-black leading-tight">
+                  Daily counter sales logged in VertexIS reconciled against physical manual receipt booklets for official enterprise sales accounting.
+                </p>
+              </div>
+
               {/* Signatures */}
-              <div className="pt-6 pb-2 text-[11px] grid grid-cols-2 gap-6 print:text-black">
+              <div className="pt-4 pb-2 text-[11px] grid grid-cols-2 gap-6 print:text-black">
                 <div className="text-center">
                   <div className="border-b border-black dark:border-white h-8 mb-1"></div>
                   <p className="font-bold">{generatedRecord.cashierName}</p>
@@ -360,7 +417,7 @@ export const ZReadingModal: React.FC<ZReadingModalProps> = ({ onClose, onZReadin
                   className="px-4 py-2 text-xs font-medium bg-[#F37021] hover:bg-[#d95d14] text-white rounded-lg flex items-center space-x-1.5 transition-colors shadow-xs"
                 >
                   <Printer className="w-3.5 h-3.5" />
-                  <span>Print Official Z-Slip</span>
+                  <span>Print Shift Closing Slip</span>
                 </button>
               </div>
             </div>
@@ -479,6 +536,74 @@ export const ZReadingModal: React.FC<ZReadingModalProps> = ({ onClose, onZReadin
                 </div>
               </div>
 
+              {/* Physical Manual Receipt Booklet Reconciliation */}
+              <div className="p-4 bg-sky-50/60 dark:bg-sky-950/30 rounded-xl border border-sky-200 dark:border-sky-800/60 space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-bold text-sky-900 dark:text-sky-200 uppercase tracking-wider flex items-center space-x-1.5">
+                    <Building2 className="w-4 h-4 text-sky-600 dark:text-sky-400" />
+                    <span>Physical Manual Receipt Booklet Reconciliation</span>
+                  </h4>
+                  <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold bg-sky-100 dark:bg-sky-900/60 text-sky-700 dark:text-sky-300">
+                    Mandatory Daily Match
+                  </span>
+                </div>
+                <p className="text-xs text-sky-800/80 dark:text-sky-300/80 leading-relaxed">
+                  At the end of the day, total sales logged in VertexIS are matched against the physical manual receipt booklets for daily sales and enterprise accounting.
+                </p>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                  <div>
+                    <label className="text-xs font-medium text-neutral-700 dark:text-neutral-300 block mb-1">
+                      Manual Booklet Series Range
+                    </label>
+                    <input
+                      type="text"
+                      value={manualBookletSeries}
+                      onChange={(e) => setManualBookletSeries(e.target.value)}
+                      placeholder="e.g. Booklet #04 (OR #001250 - #001278)"
+                      className="w-full px-3 py-2 text-xs bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg focus:ring-1 focus:ring-sky-500 focus:outline-hidden"
+                    />
+                  </div>
+                  <div>
+                    <div className="flex justify-between items-center mb-1">
+                      <label className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
+                        Manual Booklet Counted Total (₱)
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => setManualBookletTotal(summary.netSales)}
+                        className="text-[10px] text-sky-600 dark:text-sky-400 hover:underline font-medium"
+                      >
+                        Match Terminal (₱{summary.netSales.toLocaleString()})
+                      </button>
+                    </div>
+                    <input
+                      type="number"
+                      min="0"
+                      value={manualBookletTotal}
+                      onChange={(e) => setManualBookletTotal(Number(e.target.value) || 0)}
+                      className="w-full px-3 py-2 text-xs font-bold bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg focus:ring-1 focus:ring-sky-500 focus:outline-hidden font-mono"
+                    />
+                  </div>
+                </div>
+
+                {/* Match Status Banner */}
+                <div className={`p-2.5 rounded-lg text-xs flex items-center justify-between font-medium ${
+                  isBookletMatched
+                    ? 'bg-emerald-100/80 dark:bg-emerald-950/50 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800'
+                    : 'bg-amber-100/80 dark:bg-amber-950/50 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-800'
+                }`}>
+                  <div className="flex items-center space-x-2">
+                    <CheckCircle className={`w-4 h-4 ${isBookletMatched ? 'text-emerald-600' : 'text-amber-600'}`} />
+                    <span>
+                      {isBookletMatched
+                        ? `✓ Confirmed: Physical booklet total matches VertexIS terminal sales (₱${summary.netSales.toLocaleString()})`
+                        : `⚠️ Variance detected: Booklet total (₱${manualBookletTotal.toLocaleString()}) vs Terminal (₱${summary.netSales.toLocaleString()})`}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
               {/* Manager PIN & Approvals */}
               <div className="space-y-3 pt-2 border-t border-neutral-200 dark:border-neutral-800">
                 <h4 className="text-xs font-bold text-neutral-900 dark:text-neutral-100 uppercase tracking-wider flex items-center space-x-1.5">
@@ -550,9 +675,9 @@ export const ZReadingModal: React.FC<ZReadingModalProps> = ({ onClose, onZReadin
 
               {/* Notice */}
               <div className="p-3 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/60 rounded-lg text-amber-700 dark:text-amber-300 text-xs">
-                <p className="font-semibold">⚠️ Notice: Permanent Shift Closing</p>
+                <p className="font-semibold">⚠️ Notice: Permanent Shift Closing & Booklet Reconciliation</p>
                 <p className="text-[11px] mt-0.5">
-                  Submitting this Z-Reading closes today's register transactions, rolls over the non-resettable grand total, and records an official audit entry in the BIR closing ledger.
+                  Submitting this shift closing finalizes today's counter orders, rolls over the accumulated sales total, and logs the manual receipt booklet reconciliation in the enterprise audit ledger.
                 </p>
               </div>
 
@@ -560,18 +685,29 @@ export const ZReadingModal: React.FC<ZReadingModalProps> = ({ onClose, onZReadin
               <div className="flex items-center justify-end space-x-3 pt-2">
                 <button
                   type="button"
+                  disabled={isSubmitting}
                   onClick={onClose}
-                  className="px-4 py-2 text-xs font-medium text-neutral-700 dark:text-neutral-300 hover:bg-neutral-200 dark:hover:bg-neutral-700 rounded-lg transition-colors"
+                  className="px-4 py-2 text-xs font-medium text-neutral-700 dark:text-neutral-300 hover:bg-neutral-200 dark:hover:bg-neutral-700 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Cancel
                 </button>
                 <button
                   type="button"
+                  disabled={isSubmitting}
                   onClick={handleCloseShift}
-                  className="px-5 py-2.5 text-xs font-bold bg-[#F37021] hover:bg-[#d95d14] text-white rounded-lg flex items-center space-x-2 transition-colors shadow-sm"
+                  className="px-5 py-2.5 text-xs font-bold bg-[#F37021] hover:bg-[#d95d14] text-white rounded-lg flex items-center space-x-2 transition-colors shadow-sm disabled:opacity-60 disabled:cursor-not-allowed"
                 >
-                  <Lock className="w-3.5 h-3.5" />
-                  <span>Authorize & Close Z-Reading</span>
+                  {isSubmitting ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Authorizing Shift Closing...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Lock className="w-3.5 h-3.5" />
+                      <span>Authorize & Finalize Shift Closing</span>
+                    </>
+                  )}
                 </button>
               </div>
 

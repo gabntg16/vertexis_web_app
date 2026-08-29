@@ -23,6 +23,10 @@ import {
   ShoppingBag,
   Filter,
 } from 'lucide-react';
+import {
+  ProductionSafeguardModal,
+  ProductionSafeguardDetails,
+} from '../safeguards/ProductionSafeguardModal';
 
 const STAGE_LABELS: Record<string, { label: string; icon: React.FC<{ className?: string }>; color: string; bg: string }> = {
   in_kettle: {
@@ -85,6 +89,9 @@ export const AdminProduction: React.FC = () => {
   const [activeSubTab, setActiveSubTab] = useState<'pipeline' | 'batches' | 'demand' | 'catalog'>('pipeline');
   const [batchStageFilter, setBatchStageFilter] = useState<string>('all');
 
+  // Safeguard modal state
+  const [safeguardDetails, setSafeguardDetails] = useState<ProductionSafeguardDetails | null>(null);
+
   // Modals state
   const [showLogModal, setShowLogModal] = useState(false);
   const [selectedProductId, setSelectedProductId] = useState<string>(products[0]?.id || '');
@@ -127,27 +134,68 @@ export const AdminProduction: React.FC = () => {
   const handleStartCustomBatch = (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedProductId || productionQty <= 0) return;
-    logProductionBatch({
-      productId: selectedProductId,
+
+    const prod = products.find((p) => p.id === selectedProductId);
+    const flavorName = prod?.flavor || 'Gourmet Marshmallow';
+
+    // Trigger safeguard alert modal to confirm action
+    setSafeguardDetails({
+      isOpen: true,
+      type: 'cook_batch',
+      title: 'Start Confectionery Kitchen Batch?',
+      flavor: flavorName,
       quantity: Number(productionQty),
       chefName: selectedChef,
-      stage: 'in_kettle',
       notes: batchNotes,
+      onConfirm: () => {
+        logProductionBatch({
+          productId: selectedProductId,
+          quantity: Number(productionQty),
+          chefName: selectedChef,
+          stage: 'in_kettle',
+          notes: batchNotes,
+        });
+        setShowLogModal(false);
+        setProductionQty(100);
+      },
     });
-    setShowLogModal(false);
-    setProductionQty(100);
   };
 
   const handleTransferStock = (e: React.FormEvent) => {
     e.preventDefault();
     setTransferError(null);
-    try {
-      addProductionStock(transferBranchId, transferProductId, Number(transferQty));
-      setShowTransferModal(false);
-      setTransferQty(20);
-    } catch (err: any) {
-      setTransferError(err.message || 'Transfer failed');
+
+    const prod = products.find((p) => p.id === transferProductId);
+    const branch = branches.find((b) => b.id === transferBranchId);
+    const qty = Number(transferQty);
+
+    if (!prod || !branch || qty <= 0) return;
+
+    if (qty > prod.adminStock) {
+      setTransferError(`Insufficient commissary buffer! Only ${prod.adminStock} units available.`);
+      return;
     }
+
+    // Trigger safeguard alert modal to confirm action
+    setSafeguardDetails({
+      isOpen: true,
+      type: 'allocate_stock',
+      title: 'Confirm Branch Stock Transfer?',
+      flavor: prod.flavor,
+      quantity: qty,
+      branchName: `${branch.name} (${branch.location})`,
+      currentBufferStock: prod.adminStock,
+      remainingBufferStock: prod.adminStock - qty,
+      onConfirm: () => {
+        try {
+          addProductionStock(transferBranchId, transferProductId, qty);
+          setShowTransferModal(false);
+          setTransferQty(20);
+        } catch (err: any) {
+          setTransferError(err.message || 'Transfer failed');
+        }
+      },
+    });
   };
 
   const handleOpenNewProduct = () => {
@@ -190,38 +238,46 @@ export const AdminProduction: React.FC = () => {
     <div className="space-y-6">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
+        <div className="min-w-0">
           <div className="inline-flex items-center space-x-1.5 text-xs font-bold text-[#F37021] mb-1">
-            <Sparkles className="w-3.5 h-3.5" />
+            <Sparkles className="w-3.5 h-3.5 shrink-0" />
             <span>Made-to-Order Confectionery Management</span>
           </div>
-          <h1 className="text-2xl font-black tracking-tight">Central Commissary & Production Batches</h1>
-          <p className="text-xs text-neutral-500 font-medium">
+          <h1 className="text-xl sm:text-2xl font-black tracking-tight text-neutral-900 dark:text-white">
+            Central Commissary & Production Batches
+          </h1>
+          <p className="text-xs text-neutral-500 font-medium mt-0.5 max-w-2xl">
             Production is driven by made-to-order branch requisitions. Track live kettle whips, curing slabs, and dispatch readiness.
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
+        {/* Responsive Action Buttons with Safeguard Confirmations */}
+        <div className="flex flex-col xs:flex-row sm:flex-row items-stretch sm:items-center gap-2.5 w-full sm:w-auto shrink-0">
           <button
+            type="button"
             onClick={() => setShowLogModal(true)}
-            className="px-4 py-2.5 rounded-xl bg-[#F37021] text-white text-xs sm:text-sm font-bold shadow-md hover:bg-[#d85e15] transition-all flex items-center space-x-1.5"
+            className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-[#F37021] text-white text-xs sm:text-sm font-bold shadow-md hover:bg-[#d85e15] active:scale-98 transition-all flex items-center justify-center space-x-2 cursor-pointer"
           >
-            <Flame className="w-4 h-4" />
+            <Flame className="w-4 h-4 shrink-0" />
             <span>+ Cook MTO Batch</span>
           </button>
           <button
-            onClick={() => setShowTransferModal(true)}
-            className="px-4 py-2.5 rounded-xl bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 text-xs sm:text-sm font-bold hover:bg-neutral-50 dark:hover:bg-neutral-700 transition-all flex items-center space-x-1.5"
+            type="button"
+            onClick={() => {
+              setTransferError(null);
+              setShowTransferModal(true);
+            }}
+            className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 text-xs sm:text-sm font-bold text-neutral-800 dark:text-neutral-200 hover:bg-neutral-50 dark:hover:bg-neutral-750 active:scale-98 transition-all flex items-center justify-center space-x-2 shadow-xs cursor-pointer"
           >
-            <ArrowRightLeft className="w-4 h-4 text-[#80C7F2]" />
+            <ArrowRightLeft className="w-4 h-4 text-[#80C7F2] shrink-0" />
             <span>Branch Stock Allocation</span>
           </button>
         </div>
       </div>
 
       {/* Made-to-Order Top Performance Metrics */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className={`p-4 rounded-3xl border transition-all ${
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+        <div className={`p-4 sm:p-5 rounded-3xl border transition-all ${
           isDark ? 'bg-[#161616] border-neutral-800' : 'bg-white border-orange-500/20 shadow-xs'
         }`}>
           <div className="flex items-center justify-between text-neutral-400 mb-1">
@@ -232,7 +288,7 @@ export const AdminProduction: React.FC = () => {
           <p className="text-[11px] text-neutral-500 mt-1">Made-to-order requests from branches</p>
         </div>
 
-        <div className={`p-4 rounded-3xl border transition-all ${
+        <div className={`p-4 sm:p-5 rounded-3xl border transition-all ${
           isDark ? 'bg-[#161616] border-neutral-800' : 'bg-white border-amber-500/20 shadow-xs'
         }`}>
           <div className="flex items-center justify-between text-neutral-400 mb-1">
@@ -243,7 +299,7 @@ export const AdminProduction: React.FC = () => {
           <p className="text-[11px] text-neutral-500 mt-1">{activeBatchesCount} live cooking batches active</p>
         </div>
 
-        <div className={`p-4 rounded-3xl border transition-all ${
+        <div className={`p-4 sm:p-5 rounded-3xl border transition-all ${
           isDark ? 'bg-[#161616] border-neutral-800' : 'bg-white border-sky-500/20 shadow-xs'
         }`}>
           <div className="flex items-center justify-between text-neutral-400 mb-1">
@@ -254,7 +310,7 @@ export const AdminProduction: React.FC = () => {
           <p className="text-[11px] text-neutral-500 mt-1">HQ finished buffer for urgent restocks</p>
         </div>
 
-        <div className={`p-4 rounded-3xl border transition-all ${
+        <div className={`p-4 sm:p-5 rounded-3xl border transition-all ${
           isDark ? 'bg-[#161616] border-neutral-800' : 'bg-white border-emerald-500/20 shadow-xs'
         }`}>
           <div className="flex items-center justify-between text-neutral-400 mb-1">
@@ -266,53 +322,53 @@ export const AdminProduction: React.FC = () => {
         </div>
       </div>
 
-      {/* Production Navigation Subtabs */}
-      <div className="flex items-center space-x-2 border-b border-neutral-200 dark:border-neutral-800 pb-3 overflow-x-auto">
+      {/* Production Navigation Subtabs (Responsive Scrollable with smooth snapping) */}
+      <div className="flex items-center space-x-2 border-b border-neutral-200 dark:border-neutral-800 pb-3 overflow-x-auto no-scrollbar">
         <button
           onClick={() => setActiveSubTab('pipeline')}
-          className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center space-x-2 transition-all ${
+          className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center space-x-2 shrink-0 whitespace-nowrap transition-all cursor-pointer ${
             activeSubTab === 'pipeline'
               ? 'bg-[#F37021] text-white shadow-xs'
               : 'bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400 hover:bg-neutral-200 dark:hover:bg-neutral-700'
           }`}
         >
-          <Building2 className="w-4 h-4" />
+          <Building2 className="w-4 h-4 shrink-0" />
           <span>Branch Requisitions Pipeline ({activeMTOOrders.length})</span>
         </button>
 
         <button
           onClick={() => setActiveSubTab('batches')}
-          className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center space-x-2 transition-all ${
+          className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center space-x-2 shrink-0 whitespace-nowrap transition-all cursor-pointer ${
             activeSubTab === 'batches'
               ? 'bg-[#F37021] text-white shadow-xs'
               : 'bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400 hover:bg-neutral-200 dark:hover:bg-neutral-700'
           }`}
         >
-          <Flame className="w-4 h-4" />
+          <Flame className="w-4 h-4 shrink-0" />
           <span>Live Kitchen Batches ({productionBatches.length})</span>
         </button>
 
         <button
           onClick={() => setActiveSubTab('demand')}
-          className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center space-x-2 transition-all ${
+          className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center space-x-2 shrink-0 whitespace-nowrap transition-all cursor-pointer ${
             activeSubTab === 'demand'
               ? 'bg-[#F37021] text-white shadow-xs'
               : 'bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400 hover:bg-neutral-200 dark:hover:bg-neutral-700'
           }`}
         >
-          <TrendingUp className="w-4 h-4" />
+          <TrendingUp className="w-4 h-4 shrink-0" />
           <span>Flavor Demand Matrix</span>
         </button>
 
         <button
           onClick={() => setActiveSubTab('catalog')}
-          className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center space-x-2 transition-all ${
+          className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center space-x-2 shrink-0 whitespace-nowrap transition-all cursor-pointer ${
             activeSubTab === 'catalog'
               ? 'bg-[#F37021] text-white shadow-xs'
               : 'bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400 hover:bg-neutral-200 dark:hover:bg-neutral-700'
           }`}
         >
-          <Package className="w-4 h-4" />
+          <Package className="w-4 h-4 shrink-0" />
           <span>Commissary Catalog & Buffer</span>
         </button>
       </div>
@@ -320,7 +376,7 @@ export const AdminProduction: React.FC = () => {
       {/* SUBTAB 1: Branch Requisitions Pipeline */}
       {activeSubTab === 'pipeline' && (
         <div className="space-y-4">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
             <h2 className="text-base font-bold">Made-to-Order Branch Requisitions</h2>
             <span className="text-xs text-neutral-500 font-medium">
               Orders automatically create kitchen production batches upon approval or kitchen dispatch.
@@ -346,7 +402,7 @@ export const AdminProduction: React.FC = () => {
                 return (
                   <div
                     key={ord.id}
-                    className={`p-5 rounded-3xl border transition-all ${
+                    className={`p-4 sm:p-5 rounded-3xl border transition-all ${
                       isDark ? 'bg-[#161616] border-neutral-800' : 'bg-white border-neutral-200 shadow-xs'
                     }`}
                   >
@@ -394,18 +450,19 @@ export const AdminProduction: React.FC = () => {
                         {/* Estimated Ready */}
                         {ord.estimatedReadyDate && (
                           <p className="text-xs text-neutral-500 flex items-center space-x-1">
-                            <Clock className="w-3.5 h-3.5 text-neutral-400" />
+                            <Clock className="w-3.5 h-3.5 text-neutral-400 shrink-0" />
                             <span>Estimated Dispatch Ready: <strong className="text-neutral-700 dark:text-neutral-300">{ord.estimatedReadyDate}</strong></span>
                           </p>
                         )}
                       </div>
 
                       {/* Stage Progression Controls */}
-                      <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
-                        <div className="flex items-center space-x-1 bg-neutral-100 dark:bg-neutral-800/80 p-1.5 rounded-2xl border border-neutral-200 dark:border-neutral-700">
+                      <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
+                        <div className="flex flex-wrap items-center gap-1 bg-neutral-100 dark:bg-neutral-800/80 p-1.5 rounded-2xl border border-neutral-200 dark:border-neutral-700">
                           <button
+                            type="button"
                             onClick={() => updateOrderProductionStage(ord.id, 'queued')}
-                            className={`px-2.5 py-1 rounded-xl text-[11px] font-bold transition-all ${
+                            className={`px-2.5 py-1 rounded-xl text-[11px] font-bold transition-all cursor-pointer ${
                               stage === 'queued'
                                 ? 'bg-white dark:bg-neutral-900 shadow-xs text-neutral-900 dark:text-white'
                                 : 'text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200'
@@ -414,9 +471,21 @@ export const AdminProduction: React.FC = () => {
                             1. Queued
                           </button>
                           <button
+                            type="button"
                             disabled={!isBatchingEligible}
-                            onClick={() => updateOrderProductionStage(ord.id, 'in_kettle')}
-                            className={`px-2.5 py-1 rounded-xl text-[11px] font-bold transition-all ${
+                            onClick={() => {
+                              setSafeguardDetails({
+                                isOpen: true,
+                                type: 'advance_stage',
+                                title: `Move Order #${ord.id} to Boiling & Curing?`,
+                                branchName: ord.branchName,
+                                orderId: ord.id,
+                                fromStage: 'Queued',
+                                toStage: 'Kettle, Whip & Curing',
+                                onConfirm: () => updateOrderProductionStage(ord.id, 'in_kettle'),
+                              });
+                            }}
+                            className={`px-2.5 py-1 rounded-xl text-[11px] font-bold transition-all cursor-pointer ${
                               stage === 'in_kettle' || stage === 'curing'
                                 ? 'bg-amber-500 text-white shadow-xs'
                                 : isBatchingEligible
@@ -428,9 +497,21 @@ export const AdminProduction: React.FC = () => {
                             2. Kettle & Cure
                           </button>
                           <button
+                            type="button"
                             disabled={!isBatchingEligible}
-                            onClick={() => updateOrderProductionStage(ord.id, 'packaged')}
-                            className={`px-2.5 py-1 rounded-xl text-[11px] font-bold transition-all ${
+                            onClick={() => {
+                              setSafeguardDetails({
+                                isOpen: true,
+                                type: 'advance_stage',
+                                title: `Advance Order #${ord.id} to Packaging & QC?`,
+                                branchName: ord.branchName,
+                                orderId: ord.id,
+                                fromStage: 'Kettle & Cure',
+                                toStage: 'Packaging & QC',
+                                onConfirm: () => updateOrderProductionStage(ord.id, 'packaged'),
+                              });
+                            }}
+                            className={`px-2.5 py-1 rounded-xl text-[11px] font-bold transition-all cursor-pointer ${
                               stage === 'packaged'
                                 ? 'bg-purple-500 text-white shadow-xs'
                                 : isBatchingEligible
@@ -442,9 +523,21 @@ export const AdminProduction: React.FC = () => {
                             3. Packaging & QC
                           </button>
                           <button
+                            type="button"
                             disabled={!isBatchingEligible}
-                            onClick={() => updateOrderProductionStage(ord.id, 'ready_for_dispatch')}
-                            className={`px-2.5 py-1 rounded-xl text-[11px] font-bold transition-all ${
+                            onClick={() => {
+                              setSafeguardDetails({
+                                isOpen: true,
+                                type: 'advance_stage',
+                                title: `Mark Order #${ord.id} Ready for Dispatch?`,
+                                branchName: ord.branchName,
+                                orderId: ord.id,
+                                fromStage: 'Packaging & QC',
+                                toStage: 'Ready for Dispatch',
+                                onConfirm: () => updateOrderProductionStage(ord.id, 'ready_for_dispatch'),
+                              });
+                            }}
+                            className={`px-2.5 py-1 rounded-xl text-[11px] font-bold transition-all cursor-pointer ${
                               stage === 'ready_for_dispatch' || (stage as string) === 'ready'
                                 ? 'bg-emerald-500 text-white shadow-xs'
                                 : isBatchingEligible
@@ -459,22 +552,33 @@ export const AdminProduction: React.FC = () => {
 
                         {stage === 'queued' && (
                           <button
+                            type="button"
                             disabled={!isBatchingEligible}
                             onClick={() => {
-                              try {
-                                produceForOrder(ord.id);
-                              } catch (err: any) {
-                                alert(err.message || 'Cannot start kitchen production');
-                              }
+                              setSafeguardDetails({
+                                isOpen: true,
+                                type: 'send_to_kitchen',
+                                title: `Send Requisition to Live Kitchen Stoves?`,
+                                branchName: ord.branchName,
+                                orderId: ord.id,
+                                quantity: totalUnits,
+                                onConfirm: () => {
+                                  try {
+                                    produceForOrder(ord.id);
+                                  } catch (err: any) {
+                                    alert(err.message || 'Cannot start kitchen production');
+                                  }
+                                },
+                              });
                             }}
-                            className={`px-3.5 py-2 rounded-xl text-xs font-bold shadow-xs flex items-center space-x-1.5 transition-all ${
+                            className={`w-full sm:w-auto px-3.5 py-2 rounded-xl text-xs font-bold shadow-xs flex items-center justify-center space-x-1.5 transition-all ${
                               isBatchingEligible
                                 ? 'bg-gradient-to-r from-[#F37021] to-amber-500 text-white hover:opacity-95 cursor-pointer'
                                 : 'bg-neutral-200 dark:bg-neutral-800 text-neutral-400 dark:text-neutral-500 cursor-not-allowed border border-neutral-300 dark:border-neutral-700'
                             }`}
                             title={!isBatchingEligible ? 'Order must be approved with verified payment proof before commissary batching.' : 'Send to Kitchen'}
                           >
-                            <Flame className="w-3.5 h-3.5" />
+                            <Flame className="w-3.5 h-3.5 shrink-0" />
                             <span>🔥 Send to Kitchen</span>
                           </button>
                         )}
@@ -500,7 +604,7 @@ export const AdminProduction: React.FC = () => {
             </div>
 
             {/* Stage filter pills */}
-            <div className="flex items-center space-x-1.5 overflow-x-auto pb-1">
+            <div className="flex items-center space-x-1.5 overflow-x-auto no-scrollbar pb-1">
               {[
                 { id: 'all', label: 'All Batches' },
                 { id: 'cooking', label: '1. Kettle, Whip & Cure' },
@@ -510,7 +614,7 @@ export const AdminProduction: React.FC = () => {
                 <button
                   key={f.id}
                   onClick={() => setBatchStageFilter(f.id)}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
                     batchStageFilter === f.id
                       ? 'bg-[#F37021] text-white shadow-xs'
                       : isDark
@@ -551,7 +655,7 @@ export const AdminProduction: React.FC = () => {
                           {batch.batchCode}
                         </span>
                         <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold border flex items-center space-x-1 ${stageInfo.bg} ${stageInfo.color}`}>
-                          <StageIcon className="w-3 h-3" />
+                          <StageIcon className="w-3 h-3 shrink-0" />
                           <span>{stageInfo.label.split('(')[0].trim()}</span>
                         </span>
                       </div>
@@ -586,8 +690,20 @@ export const AdminProduction: React.FC = () => {
                       <div className="flex items-center space-x-1.5">
                         {(batch.stage === 'in_kettle' || batch.stage === 'curing') && (
                           <button
-                            onClick={() => updateBatchStage(batch.id, 'packaging')}
-                            className="px-3 py-1.5 rounded-xl bg-purple-500 text-white text-xs font-bold hover:bg-purple-600 transition-all flex items-center space-x-1"
+                            type="button"
+                            onClick={() => {
+                              setSafeguardDetails({
+                                isOpen: true,
+                                type: 'advance_stage',
+                                title: `Move Batch ${batch.batchCode} to Packaging & QC?`,
+                                flavor: batch.productFlavor,
+                                batchCode: batch.batchCode,
+                                fromStage: 'Kettle & Cure',
+                                toStage: 'Packaging & QC',
+                                onConfirm: () => updateBatchStage(batch.id, 'packaging'),
+                              });
+                            }}
+                            className="px-3 py-1.5 rounded-xl bg-purple-500 text-white text-xs font-bold hover:bg-purple-600 transition-all flex items-center space-x-1 cursor-pointer"
                           >
                             <span>Move to Packaging & QC</span>
                             <ArrowRight className="w-3 h-3" />
@@ -595,8 +711,20 @@ export const AdminProduction: React.FC = () => {
                         )}
                         {batch.stage === 'packaging' && (
                           <button
-                            onClick={() => updateBatchStage(batch.id, 'completed')}
-                            className="px-3 py-1.5 rounded-xl bg-emerald-500 text-white text-xs font-bold hover:bg-emerald-600 transition-all flex items-center space-x-1"
+                            type="button"
+                            onClick={() => {
+                              setSafeguardDetails({
+                                isOpen: true,
+                                type: 'advance_stage',
+                                title: `Mark Batch ${batch.batchCode} Finished & Ready?`,
+                                flavor: batch.productFlavor,
+                                batchCode: batch.batchCode,
+                                fromStage: 'Packaging & QC',
+                                toStage: 'Finished & Ready for Dispatch',
+                                onConfirm: () => updateBatchStage(batch.id, 'completed'),
+                              });
+                            }}
+                            className="px-3 py-1.5 rounded-xl bg-emerald-500 text-white text-xs font-bold hover:bg-emerald-600 transition-all flex items-center space-x-1 cursor-pointer"
                           >
                             <span>Mark Finished & Ready</span>
                             <CheckCircle2 className="w-3 h-3" />
@@ -677,12 +805,13 @@ export const AdminProduction: React.FC = () => {
 
                   <div className="mt-4 pt-3 border-t border-neutral-100 dark:border-neutral-800">
                     <button
+                      type="button"
                       onClick={() => {
                         setSelectedProductId(d.productId);
                         setProductionQty(d.requestedUnits > 0 ? Math.max(50, d.requestedUnits) : 100);
                         setShowLogModal(true);
                       }}
-                      className="w-full py-2 px-3 rounded-xl bg-[#F37021]/10 text-[#F37021] hover:bg-[#F37021] hover:text-white text-xs font-bold transition-all text-center flex items-center justify-center space-x-1.5"
+                      className="w-full py-2 px-3 rounded-xl bg-[#F37021]/10 text-[#F37021] hover:bg-[#F37021] hover:text-white text-xs font-bold transition-all text-center flex items-center justify-center space-x-1.5 cursor-pointer"
                     >
                       <Flame className="w-3.5 h-3.5" />
                       <span>Start Kitchen Batch for {d.flavor.split(' ')[0]}</span>
@@ -706,8 +835,9 @@ export const AdminProduction: React.FC = () => {
               </p>
             </div>
             <button
+              type="button"
               onClick={handleOpenNewProduct}
-              className="px-3.5 py-2 rounded-xl border border-dashed border-neutral-300 dark:border-neutral-700 text-xs font-bold hover:border-[#80C7F2] hover:text-[#80C7F2] transition-all"
+              className="px-3.5 py-2 rounded-xl border border-dashed border-neutral-300 dark:border-neutral-700 text-xs font-bold hover:border-[#80C7F2] hover:text-[#80C7F2] transition-all cursor-pointer"
             >
               + Add New Flavor
             </button>
@@ -732,15 +862,26 @@ export const AdminProduction: React.FC = () => {
                       </span>
                       <div className="flex items-center space-x-1">
                         <button
+                          type="button"
                           onClick={() => handleOpenEditProduct(prod)}
-                          className="p-1.5 rounded-lg hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-400 hover:text-neutral-900 dark:hover:text-white"
+                          className="p-1.5 rounded-lg hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-400 hover:text-neutral-900 dark:hover:text-white cursor-pointer"
                           title="Edit Product"
                         >
                           <Edit2 className="w-3.5 h-3.5" />
                         </button>
                         <button
-                          onClick={() => deleteProduct(prod.id)}
-                          className="p-1.5 rounded-lg hover:bg-red-500/10 text-neutral-400 hover:text-red-500"
+                          type="button"
+                          onClick={() => {
+                            setSafeguardDetails({
+                              isOpen: true,
+                              type: 'delete_product',
+                              title: `Delete Gourmet Flavor "${prod.flavor}"?`,
+                              flavor: prod.flavor,
+                              currentBufferStock: prod.adminStock,
+                              onConfirm: () => deleteProduct(prod.id),
+                            });
+                          }}
+                          className="p-1.5 rounded-lg hover:bg-red-500/10 text-neutral-400 hover:text-red-500 cursor-pointer"
                           title="Delete Product"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
@@ -779,20 +920,23 @@ export const AdminProduction: React.FC = () => {
 
                   <div className="mt-5 pt-3 border-t border-neutral-100 dark:border-neutral-800 flex items-center space-x-2">
                     <button
+                      type="button"
                       onClick={() => {
                         setSelectedProductId(prod.id);
                         setShowLogModal(true);
                       }}
-                      className="flex-1 py-2 px-3 rounded-xl bg-neutral-100 dark:bg-neutral-800 hover:bg-[#80C7F2]/20 hover:text-[#1a7bb5] dark:hover:text-[#80C7F2] text-xs font-bold transition-all text-center"
+                      className="flex-1 py-2 px-3 rounded-xl bg-neutral-100 dark:bg-neutral-800 hover:bg-[#80C7F2]/20 hover:text-[#1a7bb5] dark:hover:text-[#80C7F2] text-xs font-bold transition-all text-center cursor-pointer"
                     >
                       + Cook Batch
                     </button>
                     <button
+                      type="button"
                       onClick={() => {
                         setTransferProductId(prod.id);
+                        setTransferError(null);
                         setShowTransferModal(true);
                       }}
-                      className="flex-1 py-2 px-3 rounded-xl bg-[#F37021]/10 text-[#F37021] hover:bg-[#F37021] hover:text-white text-xs font-bold transition-all text-center"
+                      className="flex-1 py-2 px-3 rounded-xl bg-[#F37021]/10 text-[#F37021] hover:bg-[#F37021] hover:text-white text-xs font-bold transition-all text-center cursor-pointer"
                     >
                       Allocate
                     </button>
@@ -890,13 +1034,13 @@ export const AdminProduction: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setShowLogModal(false)}
-                  className="px-3.5 py-2 font-medium rounded-xl border border-neutral-300 dark:border-neutral-700"
+                  className="px-3.5 py-2 font-medium rounded-xl border border-neutral-300 dark:border-neutral-700 cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 font-bold rounded-xl bg-[#F37021] text-white hover:bg-[#d85e15]"
+                  className="px-4 py-2 font-bold rounded-xl bg-[#F37021] text-white hover:bg-[#d85e15] cursor-pointer"
                 >
                   Start Kettle Cook
                 </button>
@@ -922,7 +1066,7 @@ export const AdminProduction: React.FC = () => {
 
             {transferError && (
               <div className="mt-3 p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-xs text-red-500 flex items-center space-x-2">
-                <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                <AlertCircle className="w-4 h-4 shrink-0" />
                 <span>{transferError}</span>
               </div>
             )}
@@ -986,15 +1130,15 @@ export const AdminProduction: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setShowTransferModal(false)}
-                  className="px-3.5 py-2 font-medium rounded-xl border border-neutral-300 dark:border-neutral-700"
+                  className="px-3.5 py-2 font-medium rounded-xl border border-neutral-300 dark:border-neutral-700 cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 font-bold rounded-xl bg-[#80C7F2] text-neutral-900 hover:bg-[#6ab9e8]"
+                  className="px-4 py-2 font-bold rounded-xl bg-[#80C7F2] text-neutral-900 hover:bg-[#6ab9e8] cursor-pointer"
                 >
-                  Confirm Stock Transfer
+                  Review & Confirm Transfer
                 </button>
               </div>
             </form>
@@ -1086,13 +1230,13 @@ export const AdminProduction: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setShowProductModal(false)}
-                  className="px-3.5 py-2 font-medium rounded-xl border border-neutral-300 dark:border-neutral-700"
+                  className="px-3.5 py-2 font-medium rounded-xl border border-neutral-300 dark:border-neutral-700 cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 font-bold rounded-xl bg-[#F37021] text-white hover:bg-[#d85e15]"
+                  className="px-4 py-2 font-bold rounded-xl bg-[#F37021] text-white hover:bg-[#d85e15] cursor-pointer"
                 >
                   Save Flavor
                 </button>
@@ -1101,6 +1245,13 @@ export const AdminProduction: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Production & Stock Allocation Safeguard Confirmation Modal */}
+      <ProductionSafeguardModal
+        details={safeguardDetails}
+        themeMode={themeMode}
+        onClose={() => setSafeguardDetails(null)}
+      />
     </div>
   );
 };

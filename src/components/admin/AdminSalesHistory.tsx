@@ -282,8 +282,8 @@ export const AdminSalesHistory: React.FC = () => {
         <div className="flex items-center space-x-1 w-full sm:w-auto overflow-x-auto">
           {[
             { id: 'analytics', label: 'Sales Analytics & Charts', icon: TrendingUp },
-            { id: 'receipts', label: `BIR Receipts (${filteredReceipts.length})`, icon: FileText },
-            { id: 'zreadings', label: `Z-Closings (${filteredZReadings.length})`, icon: Lock },
+            { id: 'receipts', label: `Branch Order Slips (${filteredReceipts.length})`, icon: FileText },
+            { id: 'zreadings', label: `Shift Closings (${filteredZReadings.length})`, icon: Lock },
             { id: 'audit', label: `Security Audit (${filteredAuditLogs.length})`, icon: ShieldCheck },
           ].map((t) => {
             const Icon = t.icon;
@@ -424,7 +424,7 @@ export const AdminSalesHistory: React.FC = () => {
       )}
 
       {/* =========================================================================
-          TAB 2: BIR OFFICIAL RECEIPTS TABLE
+          TAB 2: INTERNAL ORDER SLIPS TABLE
           ========================================================================= */}
       {activeTab === 'receipts' && (
         <div className="rounded-2xl border border-neutral-200/90 dark:border-neutral-800 bg-white dark:bg-neutral-900 overflow-hidden shadow-2xs">
@@ -432,7 +432,7 @@ export const AdminSalesHistory: React.FC = () => {
             <table className="w-full text-left text-xs">
               <thead className="bg-neutral-50 dark:bg-neutral-800/60 border-b border-neutral-200 dark:border-neutral-800 font-bold uppercase tracking-wider text-neutral-500 text-[11px]">
                 <tr>
-                  <th className="py-3 px-4">OR No</th>
+                  <th className="py-3 px-4">Order Slip Ref</th>
                   <th className="py-3 px-4">Branch</th>
                   <th className="py-3 px-4">Date & Time</th>
                   <th className="py-3 px-4">Cashier</th>
@@ -448,7 +448,7 @@ export const AdminSalesHistory: React.FC = () => {
                 {filteredReceipts.length === 0 ? (
                   <tr>
                     <td colSpan={10} className="py-8 text-center text-neutral-400">
-                      No BIR receipts found matching your search.
+                      No order slips found matching your search.
                     </td>
                   </tr>
                 ) : (
@@ -496,7 +496,7 @@ export const AdminSalesHistory: React.FC = () => {
                           onClick={() => setActiveReceiptModal(r)}
                           className="px-2.5 py-1 bg-neutral-100 dark:bg-neutral-800 hover:bg-neutral-200 text-neutral-700 dark:text-neutral-300 rounded-lg text-xs font-semibold"
                         >
-                          View Receipt
+                          View Slip
                         </button>
                       </td>
                     </tr>

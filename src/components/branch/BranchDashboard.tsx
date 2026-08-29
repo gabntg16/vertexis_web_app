@@ -61,7 +61,7 @@ export const BranchDashboard: React.FC<{ onNavigateTab: (tab: string) => void }>
               {currentBranch.name}
             </h1>
             <p className="text-sm text-neutral-600 dark:text-neutral-300 mt-1 max-w-xl font-medium">
-              Daily branch operations, retail Point-of-Sale checkout, commissary restock orders, and inbound shipments.
+              Daily branch operations, counter terminal order entry, live inventory synchronization, commissary restock orders, and inbound shipments.
             </p>
           </div>
 
@@ -71,7 +71,7 @@ export const BranchDashboard: React.FC<{ onNavigateTab: (tab: string) => void }>
               className="px-4 py-2.5 rounded-xl bg-emerald-600 text-white text-xs sm:text-sm font-bold shadow-md hover:bg-emerald-700 transition-all flex items-center space-x-1.5"
             >
               <DollarSign className="w-4 h-4" />
-              <span>Record Retail Sale (POS)</span>
+              <span>Counter Terminal Entry</span>
             </button>
             <button
               onClick={() => onNavigateTab('orders')}

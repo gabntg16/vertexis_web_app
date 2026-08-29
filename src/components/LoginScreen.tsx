@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useData } from '../context/DataContext';
+import marshbitesLogo from '../assets/images/marshbites_logo_1787964569459.jpg';
 import { ShieldCheck, Store, Lock, Mail, ArrowRight, Sparkles, AlertCircle } from 'lucide-react';
 
 export const LoginScreen: React.FC = () => {
@@ -42,14 +43,14 @@ export const LoginScreen: React.FC = () => {
           {/* Logo */}
           <div className="mx-auto w-24 h-24 rounded-3xl bg-white dark:bg-neutral-800 p-1.5 shadow-lg mb-4 flex items-center justify-center border border-neutral-200/90 dark:border-neutral-700 overflow-hidden">
             <img
-              src="/marshbites_logo.jpg"
+              src={marshbitesLogo}
               alt="The Marsh Bites"
               className="w-full h-full object-cover rounded-2xl"
               referrerPolicy="no-referrer"
               onError={(e) => {
                 const target = e.currentTarget;
-                if (target.src.indexOf('marshbites_withText.png') === -1) {
-                  target.src = '/marshbites_withText.png';
+                if (!target.src.includes('marshbites_logo.jpg')) {
+                  target.src = '/marshbites_logo.jpg';
                 }
               }}
             />

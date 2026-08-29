@@ -37,9 +37,9 @@ export const XReadingModal: React.FC<XReadingModalProps> = ({ onClose }) => {
             </div>
             <div>
               <h3 className="text-sm font-semibold text-neutral-900 dark:text-neutral-100">
-                X-Reading (Interim Sales Audit)
+                X-Reading (Interim Counter Sales Audit)
               </h3>
-              <p className="text-xs text-neutral-500">Live Non-Closing Shift Audit</p>
+              <p className="text-xs text-neutral-500">Live Non-Closing Shift Audit & Float Check</p>
             </div>
           </div>
           <div className="flex items-center space-x-2">
@@ -62,18 +62,28 @@ export const XReadingModal: React.FC<XReadingModalProps> = ({ onClose }) => {
         {/* Printable Thermal Slip */}
         <div className="p-6 max-h-[80vh] overflow-y-auto font-mono text-[13px] leading-relaxed text-neutral-800 dark:text-neutral-200 print:text-black print:max-h-none print:overflow-visible print:p-2">
           
+          {/* Prominent Non-OR Warning Banner */}
+          <div className="mb-3 p-2 bg-amber-50 dark:bg-amber-950/40 border-2 border-dashed border-amber-400 dark:border-amber-600 rounded-lg text-center print:border-black print:bg-neutral-100">
+            <p className="text-[11px] font-black tracking-wider text-amber-900 dark:text-amber-300 print:text-black uppercase">
+              *** THIS IS NOT AN OFFICIAL RECEIPT ***
+            </p>
+            <p className="text-[9.5px] font-sans font-medium text-amber-800 dark:text-amber-400 print:text-black">
+              Internal Counter Sales Summary & Interim Audit Slip
+            </p>
+          </div>
+
           {/* Header */}
           <div className="text-center space-y-1 pb-4 border-b border-dashed border-neutral-300 dark:border-neutral-700 print:border-black">
             <h1 className="text-base font-bold text-neutral-900 dark:text-white print:text-black">
               THE MARSH BITES
             </h1>
-            <p className="text-xs font-semibold">{currentBranch?.name || 'Branch POS'}</p>
+            <p className="text-xs font-semibold">{currentBranch?.name || 'Branch Counter Terminal'}</p>
             <p className="text-[11px] text-neutral-500">{currentBranch?.location}</p>
             <div className="pt-2 text-xs font-bold text-sky-600 dark:text-sky-400 uppercase tracking-widest print:text-black">
-              *** X-READING REPORT ***
+              *** X-READING INTERIM AUDIT ***
             </div>
             <p className="text-[10px] text-neutral-400 italic">
-              (Interim shift sales inquiry — Counter active)
+              (Internal Counter Sales Summary — Non-Closing Shift Inquiry)
             </p>
           </div>
 
@@ -100,11 +110,11 @@ export const XReadingModal: React.FC<XReadingModalProps> = ({ onClose }) => {
           {/* Sequence Numbers */}
           <div className="py-3 border-b border-dashed border-neutral-300 dark:border-neutral-700 text-xs space-y-1 print:border-black">
             <div className="flex justify-between">
-              <span className="text-neutral-500">Beginning OR No:</span>
+              <span className="text-neutral-500">Beginning Slip Ref:</span>
               <span className="font-semibold">{summary.beginningReceiptNo}</span>
             </div>
             <div className="flex justify-between">
-              <span className="text-neutral-500">Ending OR No:</span>
+              <span className="text-neutral-500">Ending Slip Ref:</span>
               <span className="font-semibold">{summary.endingReceiptNo}</span>
             </div>
             <div className="flex justify-between">
@@ -203,9 +213,9 @@ export const XReadingModal: React.FC<XReadingModalProps> = ({ onClose }) => {
           {/* Footer Notice */}
           <div className="text-center pt-4 space-y-1 text-[10px] text-neutral-400 print:text-black">
             <p className="font-semibold text-neutral-600 dark:text-neutral-400 print:text-black">
-              END OF X-READING REPORT
+              END OF X-READING INTERIM AUDIT REPORT
             </p>
-            <p>Non-destructive interim audit report for cashier reference.</p>
+            <p>Non-destructive interim audit report for counter float verification & manual booklet matching.</p>
           </div>
 
         </div>

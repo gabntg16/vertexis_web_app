@@ -7,6 +7,7 @@ import {
   isMockPaymentMode,
   subscribeToPaymentUpdates,
 } from '../../services/paymentGateway';
+import { validateUploadedFile } from '../../utils/fileValidation';
 import {
   X,
   Smartphone,
@@ -82,6 +83,54 @@ export const BranchPaymentModal: React.FC<BranchPaymentModalProps> = ({
   const [proofUrlInput, setProofUrlInput] = useState('');
   const [manualReference, setManualReference] = useState('');
   const [copiedField, setCopiedField] = useState<string | null>(null);
+  const [isValidatingFile, setIsValidatingFile] = useState(false);
+  const [validatedFileInfo, setValidatedFileInfo] = useState<{ fileName: string; fileSize: number; mimeType: string } | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsValidatingFile(true);
+    setToastMessage({ type: 'info', text: 'Scanning file integrity & magic bytes...' });
+
+    try {
+      const validation = await validateUploadedFile(file, {
+        maxSizeBytes: 15 * 1024 * 1024, // 15MB
+        allowedMimeTypes: ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'],
+        verifyImageDecodable: true,
+      });
+
+      if (!validation.isValid) {
+        setToastMessage({
+          type: 'error',
+          text: validation.error || 'File validation failed security check.',
+        });
+        setValidatedFileInfo(null);
+        if (fileInputRef.current) fileInputRef.current.value = '';
+        return;
+      }
+
+      setProofUrlInput(validation.dataUrl || '');
+      setValidatedFileInfo({
+        fileName: file.name,
+        fileSize: file.size,
+        mimeType: validation.detectedMimeType || file.type,
+      });
+
+      setToastMessage({
+        type: 'success',
+        text: `✓ File verified safe: ${file.name} (${(file.size / 1024).toFixed(1)} KB)`,
+      });
+    } catch (err: any) {
+      setToastMessage({
+        type: 'error',
+        text: err?.message || 'Error processing uploaded file.',
+      });
+    } finally {
+      setIsValidatingFile(false);
+    }
+  };
   
   // Timers & Status
   const [timeLeftSec, setTimeLeftSec] = useState(1800); // 30 minutes
@@ -435,6 +484,7 @@ export const BranchPaymentModal: React.FC<BranchPaymentModalProps> = ({
                           src={currentIntent.qrCodeUrl}
                           alt={`${selectedMethod.toUpperCase()} Payment QR Code`}
                           className="w-48 h-48 rounded-lg object-contain"
+                          referrerPolicy="no-referrer"
                         />
                         {/* Overlay Logo / Watermark */}
                         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
@@ -672,8 +722,39 @@ export const BranchPaymentModal: React.FC<BranchPaymentModalProps> = ({
                 </div>
               </div>
 
-              {/* Proof Image URL & Reference Input */}
+              {/* Proof Image Upload / URL & Reference Input */}
               <form onSubmit={handleManualProofSubmit} className="space-y-3 text-xs">
+                {/* File Upload / Dropzone */}
+                <div className="p-3.5 rounded-2xl border-2 border-dashed border-neutral-300 dark:border-neutral-700 bg-neutral-50/50 dark:bg-neutral-800/40 text-center space-y-2">
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp,application/pdf"
+                    onChange={handleFileUpload}
+                    className="hidden"
+                    id="branch-proof-file-input"
+                  />
+                  <label
+                    htmlFor="branch-proof-file-input"
+                    className="cursor-pointer inline-flex items-center space-x-2 px-4 py-2 rounded-xl bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 text-neutral-800 dark:text-neutral-200 font-bold hover:bg-neutral-100 dark:hover:bg-neutral-700 shadow-2xs transition-all"
+                  >
+                    <Upload className="w-4 h-4 text-[#F37021]" />
+                    <span>{isValidatingFile ? 'Scanning File...' : 'Upload Slip Image / PDF'}</span>
+                  </label>
+                  <p className="text-[11px] text-neutral-500">
+                    PNG, JPG, WebP, PDF up to 15MB • Binary magic-byte verified & script scanned
+                  </p>
+
+                  {validatedFileInfo && (
+                    <div className="p-2 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-700 dark:text-emerald-300 text-[11px] font-semibold flex items-center justify-center space-x-1.5">
+                      <CheckCircle2 className="w-3.5 h-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
+                      <span>
+                        Verified Authentic: {validatedFileInfo.fileName} ({(validatedFileInfo.fileSize / 1024).toFixed(1)} KB)
+                      </span>
+                    </div>
+                  )}
+                </div>
+
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                   <div>
                     <label className="block font-bold uppercase tracking-wider text-neutral-400 mb-1">
@@ -690,14 +771,14 @@ export const BranchPaymentModal: React.FC<BranchPaymentModalProps> = ({
                   </div>
                   <div>
                     <label className="block font-bold uppercase tracking-wider text-neutral-400 mb-1">
-                      Proof Screenshot Image URL
+                      Proof Screenshot URL / File Data
                     </label>
                     <input
-                      type="url"
+                      type="text"
                       required
                       value={proofUrlInput}
                       onChange={(e) => setProofUrlInput(e.target.value)}
-                      placeholder="https://..."
+                      placeholder="Upload file above or paste URL (https://...)"
                       className="w-full p-2.5 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white"
                     />
                   </div>
@@ -713,7 +794,8 @@ export const BranchPaymentModal: React.FC<BranchPaymentModalProps> = ({
                   </button>
                   <button
                     type="submit"
-                    className="px-5 py-2 font-bold rounded-xl bg-[#F37021] text-white hover:bg-[#d85e15] flex items-center space-x-1.5 shadow-sm"
+                    disabled={isValidatingFile || !proofUrlInput.trim()}
+                    className="px-5 py-2 font-bold rounded-xl bg-[#F37021] text-white hover:bg-[#d85e15] disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-1.5 shadow-sm"
                   >
                     <Upload className="w-4 h-4" />
                     <span>Submit Transfer Proof to HQ</span>

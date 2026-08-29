@@ -41,6 +41,11 @@ import {
 } from '../types';
 import { firestoreSync, SyncState } from '../services/firestoreSync';
 import {
+  idempotencyManager,
+  validateStateTransition,
+  generateClientRequestId,
+} from '../utils/idempotency';
+import {
   INITIAL_ENHANCED_BRANCHES,
   INITIAL_BRANCH_APPLICATIONS,
   INITIAL_BRANCH_ACCOUNTS,
@@ -436,16 +441,18 @@ interface DataContextType {
     chefName?: string;
     stage?: BatchStage;
     notes?: string;
+    clientRequestId?: string;
   }) => ProductionBatch;
   updateBatchStage: (batchId: string, stage: BatchStage) => void;
   updateOrderProductionStage: (orderId: string, stage: ProductionStage, batchCode?: string) => void;
-  produceForOrder: (orderId: string, chefName?: string) => void;
-  addProductionStock: (branchId: string, productId: string, quantity: number) => void;
+  produceForOrder: (orderId: string, chefName?: string, clientRequestId?: string) => void;
+  addProductionStock: (branchId: string, productId: string, quantity: number, clientRequestId?: string) => void;
   createOrder: (
     items: { productId: string; productName: string; quantity: number; unitPrice: number }[],
     customTotal?: number,
     packageName?: string,
-    packageTier?: 'silver' | 'gold' | 'platinum'
+    packageTier?: 'silver' | 'gold' | 'platinum',
+    clientRequestId?: string
   ) => Order | null;
   uploadPaymentProof: (
     orderId: string,
@@ -534,12 +541,14 @@ interface DataContextType {
     cashierName?: string;
     amountTendered?: number;
     customerName?: string;
+    clientRequestId?: string;
   }) => { receipt: BIRReceipt; change: number };
   voidPOSTransaction: (
     receiptId: string,
     managerPin: string,
     managerName: string,
-    voidReason: string
+    voidReason: string,
+    clientRequestId?: string
   ) => { success: boolean; message?: string; receipt?: BIRReceipt };
   refundPOSTransaction: (
     receiptId: string,
@@ -548,14 +557,19 @@ interface DataContextType {
     refundReason: string,
     refundMethod: POSPaymentMethod,
     restockInventory: boolean,
-    itemProductIds?: string[]
+    itemProductIds?: string[],
+    clientRequestId?: string
   ) => { success: boolean; message?: string; refundAmount?: number };
   closeShiftAndGenerateZReading: (payload: {
     cashierName: string;
     managerApprovedBy: string;
     actualCash: number;
     cashBreakdown?: CashDenominationCount[];
+    manualBookletSeries?: string;
+    manualBookletTotal?: number;
+    manualBookletMatched?: boolean;
     notes?: string;
+    clientRequestId?: string;
   }) => ShiftClosingRecord;
   getXReadingSummary: (branchId?: string) => {
     grossSales: number;
@@ -612,6 +626,7 @@ interface DataContextType {
   }[];
   totalRevenue: number;
   pendingOrdersCount: number;
+  readyForDispatchOrdersCount: number;
 }
 
 const DataContext = createContext<DataContextType | null>(null);
@@ -1821,51 +1836,78 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     chefName?: string;
     stage?: BatchStage;
     notes?: string;
+    clientRequestId?: string;
   }): ProductionBatch => {
-    const prod = products.find((p) => p.id === payload.productId);
-    const flavor = prod ? prod.flavor : 'Custom Marshmallow';
-    const now = new Date();
-    const batchCode = `MTO-${flavor.slice(0, 3).toUpperCase()}-${now.getMonth() + 1}${now.getDate()}-${Math.floor(100 + Math.random() * 900)}`;
-
-    const newBatch: ProductionBatch = {
-      id: `batch-mto-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-      batchCode,
-      productId: payload.productId,
-      productFlavor: flavor,
-      quantity: payload.quantity,
-      targetOrderId: payload.targetOrderId,
-      targetBranchName: payload.targetBranchName,
-      stage: payload.stage || 'in_kettle',
-      chefName: payload.chefName || 'Chef Dante (Head Confectioner)',
-      startedAt: now.toISOString(),
-      notes: payload.notes || 'Made-to-order artisanal batch in Bicol Commissary',
-    };
-
-    setProductionBatches((prev) => [newBatch, ...prev]);
-    firestoreSync.saveDoc('production_batches', newBatch.id, newBatch);
-
-    // If targetOrderId provided, update order's batchCode and stage
-    if (payload.targetOrderId) {
-      setOrders((prev) =>
-        prev.map((ord) => {
-          if (ord.id === payload.targetOrderId) {
-            const updated = {
-              ...ord,
-              batchCode: ord.batchCode || batchCode,
-              productionStage: (ord.productionStage === 'queued' ? 'in_kettle' : ord.productionStage) as ProductionStage,
-            };
-            firestoreSync.saveDoc('orders', ord.id, updated);
-            return updated;
-          }
-          return ord;
-        })
-      );
+    const clientRequestId = payload.clientRequestId || generateClientRequestId('req_batch');
+    const lock = idempotencyManager.acquireLock(clientRequestId);
+    if (!lock.acquired) {
+      if (lock.existingRecord?.result) {
+        return lock.existingRecord.result as ProductionBatch;
+      }
+      throw new Error('Batch creation request is currently in-flight. Duplicate submission prevented.');
     }
 
-    return newBatch;
+    try {
+      const prod = products.find((p) => p.id === payload.productId);
+      const flavor = prod ? prod.flavor : 'Custom Marshmallow';
+      const now = new Date();
+      const batchCode = `MTO-${flavor.slice(0, 3).toUpperCase()}-${now.getMonth() + 1}${now.getDate()}-${Math.floor(100 + Math.random() * 900)}`;
+
+      const newBatch: ProductionBatch = {
+        id: `batch-mto-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        batchCode,
+        productId: payload.productId,
+        productFlavor: flavor,
+        quantity: payload.quantity,
+        targetOrderId: payload.targetOrderId,
+        targetBranchName: payload.targetBranchName,
+        stage: payload.stage || 'in_kettle',
+        chefName: payload.chefName || 'Chef Dante (Head Confectioner)',
+        startedAt: now.toISOString(),
+        notes: payload.notes || 'Made-to-order artisanal batch in Bicol Commissary',
+      };
+
+      setProductionBatches((prev) => [newBatch, ...prev]);
+      firestoreSync.saveDoc('production_batches', newBatch.id, { ...newBatch, clientRequestId });
+
+      // If targetOrderId provided, update order's batchCode and stage
+      if (payload.targetOrderId) {
+        setOrders((prev) =>
+          prev.map((ord) => {
+            if (ord.id === payload.targetOrderId) {
+              const updated = {
+                ...ord,
+                batchCode: ord.batchCode || batchCode,
+                productionStage: (ord.productionStage === 'queued' ? 'in_kettle' : ord.productionStage) as ProductionStage,
+              };
+              firestoreSync.saveDoc('orders', ord.id, updated);
+              return updated;
+            }
+            return ord;
+          })
+        );
+      }
+
+      idempotencyManager.markCompleted(clientRequestId, newBatch);
+      return newBatch;
+    } catch (err: any) {
+      idempotencyManager.markFailed(clientRequestId, err?.message);
+      throw err;
+    }
   };
 
   const updateBatchStage = (batchId: string, stage: BatchStage) => {
+    const existing = productionBatches.find((b) => b.id === batchId);
+    if (existing) {
+      if (existing.stage === stage) {
+        console.warn(`[DataContext] Batch #${batchId} is already in stage "${stage}". Action skipped.`);
+        return;
+      }
+      if (existing.stage === 'completed' && stage !== 'completed') {
+        throw new Error(`Batch #${batchId} is already completed and cannot be moved backwards.`);
+      }
+    }
+
     let targetBatch: ProductionBatch | undefined;
     setProductionBatches((prev) =>
       prev.map((b) => {
@@ -1882,12 +1924,39 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     // If batch was completed, optionally replenish product adminStock
     if (stage === 'completed' && targetBatch) {
       logProduction(targetBatch.productId, targetBatch.quantity);
+
+      // If this batch is tied to a specific order, check if all associated batches are now completed
+      if (targetBatch.targetOrderId) {
+        const orderId = targetBatch.targetOrderId;
+        const otherBatches = productionBatches.filter(
+          (b) => b.targetOrderId === orderId && b.id !== batchId && b.stage !== 'completed'
+        );
+        if (otherBatches.length === 0) {
+          const targetOrder = orders.find((o) => o.id === orderId);
+          if (targetOrder && targetOrder.status === 'approved') {
+            try {
+              updateOrderProductionStage(orderId, 'ready_for_dispatch', targetBatch.batchCode);
+            } catch (e) {
+              console.warn('[DataContext] Auto-advance order to ready_for_dispatch skipped:', e);
+            }
+          }
+        }
+      }
     }
   };
 
   const updateOrderProductionStage = (orderId: string, stage: ProductionStage, batchCode?: string) => {
     const targetOrder = orders.find((o) => o.id === orderId);
-    if (targetOrder && stage !== 'queued') {
+    if (!targetOrder) {
+      console.warn(`[DataContext] Order #${orderId} not found in active orders. Stage update skipped.`);
+      return;
+    }
+
+    if (targetOrder.status === 'rejected' || targetOrder.status === 'canceled') {
+      throw new Error(`Cannot update production stage for a ${targetOrder.status} order.`);
+    }
+
+    if (stage !== 'queued') {
       if (targetOrder.status !== 'approved' || !targetOrder.proofImagePath || targetOrder.proofImagePath.trim() === '') {
         console.warn(`[DataContext] Cannot advance MTO stage for order ${orderId}: Order must be approved with verified payment proof.`);
         throw new Error('Order must be approved with verified payment proof before commissary batching.');
@@ -1908,109 +1977,186 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return o;
       })
     );
+
+    // Notify Orders & Approvals, Logistics, and Branch when order is ready for delivery dispatch
+    if (stage === 'ready_for_dispatch') {
+      const totalUnits = targetOrder.items.reduce((sum, it) => sum + it.quantity, 0);
+      const newAnn: Announcement = {
+        id: `ann-ready-dispatch-${orderId}-${Date.now()}`,
+        title: `📦 Order #${orderId} Ready for Delivery Dispatch`,
+        message: `Order #${orderId} for ${targetOrder.branchName} (${targetOrder.packageName || `${totalUnits} packs`}) is finished and packed at the Central Commissary. It is now READY FOR DELIVERY DISPATCH via J&T Express / In-House Fleet.`,
+        createdAt: new Date().toISOString(),
+      };
+      setAnnouncements((prev) => [newAnn, ...prev.filter((a) => a.id !== newAnn.id)]);
+      firestoreSync.saveDoc('announcements', newAnn.id, newAnn);
+
+      logBranchAudit(
+        targetOrder.branchId,
+        targetOrder.branchName,
+        'ORDER_READY_FOR_DISPATCH',
+        currentUser?.name || 'Central Commissary',
+        `Order #${orderId} marked Ready for Delivery Dispatch. Orders & Approvals and Logistics notified.`
+      );
+    }
   };
 
-  const produceForOrder = (orderId: string, chefName?: string) => {
-    const targetOrder = orders.find((o) => o.id === orderId);
-    if (!targetOrder) return;
-
-    if (targetOrder.status !== 'approved' || !targetOrder.proofImagePath || targetOrder.proofImagePath.trim() === '') {
-      console.warn(`[DataContext] Cannot start commissary batching for order ${orderId}: Order must be approved and payment proof verified.`);
-      throw new Error('Order must be approved with verified payment proof before commissary batching.');
+  const produceForOrder = (orderId: string, chefName?: string, clientRequestId?: string) => {
+    const reqId = clientRequestId || generateClientRequestId(`req_prod_${orderId}`);
+    const lock = idempotencyManager.acquireLock(reqId);
+    if (!lock.acquired) {
+      console.warn(`[DataContext] Duplicate produceForOrder call prevented for order ${orderId}`);
+      return;
     }
 
-    const shortBranch = targetOrder.branchName.replace(/[^a-zA-Z]/g, '').slice(0, 3).toUpperCase();
-    const batchCode = `MTO-${shortBranch}-${targetOrder.id.slice(-4)}`;
-    const now = new Date();
-
-    const newBatches: ProductionBatch[] = targetOrder.items.map((item, idx) => ({
-      id: `batch-${Date.now()}-${idx}-${item.productId}`,
-      batchCode: `${batchCode}-${item.productId.toUpperCase()}`,
-      productId: item.productId,
-      productFlavor: item.productName.split('(')[0].trim(),
-      quantity: item.quantity,
-      targetOrderId: targetOrder.id,
-      targetBranchName: targetOrder.branchName,
-      stage: 'in_kettle',
-      chefName: chefName || (idx % 2 === 0 ? 'Chef Dante (Head Confectioner)' : 'Chef Maria (Bicol Fluff Artisan)'),
-      startedAt: now.toISOString(),
-      notes: `Made-to-order fresh cook for ${targetOrder.branchName} #${targetOrder.id}`,
-    }));
-
-    setProductionBatches((prev) => [...newBatches, ...prev]);
-    newBatches.forEach((b) => firestoreSync.saveDoc('production_batches', b.id, b));
-
-    const updatedOrder: Order = {
-      ...targetOrder,
-      batchCode,
-      productionStage: 'in_kettle',
-      estimatedReadyDate: new Date(now.getTime() + 2 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-    };
-    setOrders((prev) => prev.map((o) => (o.id === orderId ? updatedOrder : o)));
-    firestoreSync.saveDoc('orders', orderId, updatedOrder);
-  };
-
-  const addProductionStock = (branchId: string, productId: string, quantity: number) => {
-    const prod = products.find((p) => p.id === productId);
-    if (!prod || prod.adminStock < quantity) {
-      throw new Error('Insufficient Admin Stock available in central commissary');
-    }
-
-    const updatedProd = { ...prod, adminStock: prod.adminStock - quantity };
-    setProducts((prev) => prev.map((p) => (p.id === productId ? updatedProd : p)));
-    firestoreSync.saveDoc('products', productId, updatedProd);
-
-    setInventory((prev) => {
-      const exists = prev.find((i) => i.branchId === branchId && i.productId === productId);
-      if (exists) {
-        const updatedInv = { ...exists, stock: exists.stock + quantity };
-        firestoreSync.saveDoc('inventory', exists.id, updatedInv);
-        return prev.map((i) => (i.id === exists.id ? updatedInv : i));
-      } else {
-        const newInv: InventoryItem = {
-          id: `inv-${branchId}-${productId}`,
-          branchId,
-          productId,
-          productName: `${prod.flavor} (${prod.name})`,
-          stock: quantity,
-        };
-        firestoreSync.saveDoc('inventory', newInv.id, newInv);
-        return [...prev, newInv];
+    try {
+      const targetOrder = orders.find((o) => o.id === orderId);
+      if (!targetOrder) {
+        throw new Error(`Order #${orderId} not found.`);
       }
-    });
+
+      validateStateTransition('Order', orderId, targetOrder.status, ['approved'], 'Send to Kitchen / Cook MTO');
+
+      if (!targetOrder.proofImagePath || targetOrder.proofImagePath.trim() === '') {
+        console.warn(`[DataContext] Cannot start commissary batching for order ${orderId}: Order must be approved and payment proof verified.`);
+        throw new Error('Order must be approved with verified payment proof before commissary batching.');
+      }
+
+      // Check if batches already exist for this order to prevent double-cooking
+      const existingForOrder = productionBatches.filter((b) => b.targetOrderId === orderId);
+      if (existingForOrder.length > 0) {
+        console.warn(`[DataContext] Kitchen batches already exist for order ${orderId}. Skipping redundant creation.`);
+        idempotencyManager.markCompleted(reqId);
+        return;
+      }
+
+      const shortBranch = targetOrder.branchName.replace(/[^a-zA-Z]/g, '').slice(0, 3).toUpperCase();
+      const batchCode = `MTO-${shortBranch}-${targetOrder.id.slice(-4)}`;
+      const now = new Date();
+
+      const newBatches: ProductionBatch[] = targetOrder.items.map((item, idx) => ({
+        id: `batch-${Date.now()}-${idx}-${item.productId}`,
+        batchCode: `${batchCode}-${item.productId.toUpperCase()}`,
+        productId: item.productId,
+        productFlavor: item.productName.split('(')[0].trim(),
+        quantity: item.quantity,
+        targetOrderId: targetOrder.id,
+        targetBranchName: targetOrder.branchName,
+        stage: 'in_kettle',
+        chefName: chefName || (idx % 2 === 0 ? 'Chef Dante (Head Confectioner)' : 'Chef Maria (Bicol Fluff Artisan)'),
+        startedAt: now.toISOString(),
+        notes: `Made-to-order fresh cook for ${targetOrder.branchName} #${targetOrder.id}`,
+      }));
+
+      setProductionBatches((prev) => [...newBatches, ...prev]);
+      newBatches.forEach((b) => firestoreSync.saveDoc('production_batches', b.id, { ...b, clientRequestId: reqId }));
+
+      const updatedOrder: Order = {
+        ...targetOrder,
+        batchCode,
+        productionStage: 'in_kettle',
+        estimatedReadyDate: new Date(now.getTime() + 2 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+      };
+      setOrders((prev) => prev.map((o) => (o.id === orderId ? updatedOrder : o)));
+      firestoreSync.saveDoc('orders', orderId, updatedOrder);
+
+      idempotencyManager.markCompleted(reqId);
+    } catch (err: any) {
+      idempotencyManager.markFailed(reqId, err?.message);
+      throw err;
+    }
+  };
+
+  const addProductionStock = (branchId: string, productId: string, quantity: number, clientRequestId?: string) => {
+    const reqId = clientRequestId || generateClientRequestId('req_alloc');
+    const lock = idempotencyManager.acquireLock(reqId);
+    if (!lock.acquired) {
+      console.warn(`[DataContext] Duplicate stock allocation call prevented: ${reqId}`);
+      return;
+    }
+
+    try {
+      const prod = products.find((p) => p.id === productId);
+      if (!prod || prod.adminStock < quantity) {
+        throw new Error(`Insufficient Admin Stock available in central commissary. Available: ${prod?.adminStock || 0}, Requested: ${quantity}`);
+      }
+
+      const updatedProd = { ...prod, adminStock: prod.adminStock - quantity };
+      setProducts((prev) => prev.map((p) => (p.id === productId ? updatedProd : p)));
+      firestoreSync.saveDoc('products', productId, { ...updatedProd, clientRequestId: reqId });
+
+      setInventory((prev) => {
+        const exists = prev.find((i) => i.branchId === branchId && i.productId === productId);
+        if (exists) {
+          const updatedInv = { ...exists, stock: exists.stock + quantity };
+          firestoreSync.saveDoc('inventory', exists.id, { ...updatedInv, clientRequestId: reqId });
+          return prev.map((i) => (i.id === exists.id ? updatedInv : i));
+        } else {
+          const newInv: InventoryItem = {
+            id: `inv-${branchId}-${productId}`,
+            branchId,
+            productId,
+            productName: `${prod.flavor} (${prod.name})`,
+            stock: quantity,
+          };
+          firestoreSync.saveDoc('inventory', newInv.id, { ...newInv, clientRequestId: reqId });
+          return [...prev, newInv];
+        }
+      });
+
+      idempotencyManager.markCompleted(reqId);
+    } catch (err: any) {
+      idempotencyManager.markFailed(reqId, err?.message);
+      throw err;
+    }
   };
 
   const createOrder = (
     items: { productId: string; productName: string; quantity: number; unitPrice: number }[],
     customTotal?: number,
     packageName?: string,
-    packageTier?: 'silver' | 'gold' | 'platinum'
+    packageTier?: 'silver' | 'gold' | 'platinum',
+    clientRequestId?: string
   ): Order | null => {
     if (!currentUser || !currentUser.branchId) return null;
     const branch = getBranch(currentUser.branchId);
     if (!branch) return null;
 
-    const computedTotal = items.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0);
-    const finalTotal = customTotal !== undefined && customTotal > 0 ? customTotal : computedTotal;
-    const shortBranch = branch.name.replace(/[^a-zA-Z]/g, '').slice(0, 3).toUpperCase();
-    const orderIdSuffix = Date.now().toString().slice(-4);
-    const newOrder: Order = {
-      id: `ord-${Date.now().toString().slice(-6)}`,
-      branchId: branch.id,
-      branchName: branch.name,
-      status: 'pending',
-      productionStage: 'queued',
-      batchCode: `MTO-${shortBranch}-${orderIdSuffix}`,
-      totalAmount: finalTotal,
-      createdAt: new Date().toISOString(),
-      items,
-      packageName,
-      packageTier,
-    };
+    const reqId = clientRequestId || generateClientRequestId('req_order');
+    const lock = idempotencyManager.acquireLock(reqId);
+    if (!lock.acquired) {
+      if (lock.existingRecord?.result) {
+        return lock.existingRecord.result as Order;
+      }
+      throw new Error('Order submission is currently in-flight. Duplicate submission prevented.');
+    }
 
-    setOrders((prev) => [newOrder, ...prev]);
-    firestoreSync.saveDoc('orders', newOrder.id, newOrder);
-    return newOrder;
+    try {
+      const computedTotal = items.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0);
+      const finalTotal = customTotal !== undefined && customTotal > 0 ? customTotal : computedTotal;
+      const shortBranch = branch.name.replace(/[^a-zA-Z]/g, '').slice(0, 3).toUpperCase();
+      const orderIdSuffix = Date.now().toString().slice(-4);
+      const newOrder: Order = {
+        id: `ord-${Date.now().toString().slice(-6)}`,
+        branchId: branch.id,
+        branchName: branch.name,
+        status: 'pending',
+        productionStage: 'queued',
+        batchCode: `MTO-${shortBranch}-${orderIdSuffix}`,
+        totalAmount: finalTotal,
+        createdAt: new Date().toISOString(),
+        items,
+        packageName,
+        packageTier,
+      };
+
+      setOrders((prev) => [newOrder, ...prev]);
+      firestoreSync.saveDoc('orders', newOrder.id, { ...newOrder, clientRequestId: reqId });
+      idempotencyManager.markCompleted(reqId, newOrder);
+      return newOrder;
+    } catch (err: any) {
+      idempotencyManager.markFailed(reqId, err?.message);
+      throw err;
+    }
   };
 
   const uploadPaymentProof = (
@@ -2023,6 +2169,15 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       status?: PaymentGatewayStatus;
     }
   ) => {
+    const targetOrder = orders.find((o) => o.id === orderId);
+    if (!targetOrder) {
+      throw new Error(`Order #${orderId} not found.`);
+    }
+
+    if (targetOrder.status === 'completed' || targetOrder.status === 'dispatched') {
+      throw new Error(`Order #${orderId} has already progressed to ${targetOrder.status}. Payment proof cannot be re-uploaded.`);
+    }
+
     const nowIso = new Date().toISOString();
     setOrders((prev) =>
       prev.map((o) => {
@@ -2047,7 +2202,11 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const approveOrder = (orderId: string) => {
     const targetOrder = orders.find((o) => o.id === orderId);
-    if (!targetOrder) return;
+    if (!targetOrder) {
+      throw new Error(`Order #${orderId} not found.`);
+    }
+
+    validateStateTransition('Order', orderId, targetOrder.status, ['waitingApproval', 'pending'], 'Approve Order');
 
     if (!targetOrder.proofImagePath || targetOrder.proofImagePath.trim() === '') {
       console.warn(`[DataContext] Cannot approve order ${orderId}: Payment proof required before approval.`);
@@ -2092,6 +2251,13 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const rejectOrder = (orderId: string, reason: string) => {
+    const targetOrder = orders.find((o) => o.id === orderId);
+    if (!targetOrder) {
+      throw new Error(`Order #${orderId} not found.`);
+    }
+
+    validateStateTransition('Order', orderId, targetOrder.status, ['waitingApproval', 'pending'], 'Reject Order');
+
     setOrders((prev) =>
       prev.map((o) => {
         if (o.id === orderId) {
@@ -2138,54 +2304,97 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       receiverContact?: string;
       receiverPhone?: string;
       weightKg?: number;
+      clientRequestId?: string;
     }
   ): Delivery => {
-    const order = orders.find((o) => o.id === orderId);
-    if (order) {
-      if (order.status !== 'approved' && order.status !== 'dispatched') {
-        throw new Error('Order must be approved before dispatch.');
+    const reqId = extra?.clientRequestId || generateClientRequestId(`req_del_${orderId}`);
+    const lock = idempotencyManager.acquireLock(reqId);
+    if (!lock.acquired) {
+      if (lock.existingRecord?.result) {
+        return lock.existingRecord.result as Delivery;
       }
+      throw new Error(`Dispatch request for order #${orderId} is currently in-flight. Duplicate submission prevented.`);
     }
 
-    const generatedTracking = trackingNumber || extra?.waybillNumber || `MB-TRACK-${Math.floor(100000 + Math.random() * 900000)}`;
-    const newDelivery: Delivery = {
-      id: `del-${Date.now().toString().slice(-6)}`,
-      orderId,
-      branchId: order ? order.branchId : '',
-      address,
-      status: 'pending',
-      scheduledAt: scheduledAt || new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString(),
-      courierName: courierName || (extra?.dispatchMethod === 'jt_express' ? 'J&T Express Philippines' : 'Central Logistics Fleet'),
-      dispatchMethod: extra?.dispatchMethod || (courierName?.toLowerCase().includes('j&t') ? 'jt_express' : 'company_driver'),
-      trackingNumber: generatedTracking,
-      waybillNumber: extra?.waybillNumber || generatedTracking,
-      jtSortingCode: extra?.jtSortingCode,
-      driverName: extra?.driverName,
-      vehiclePlateNo: extra?.vehiclePlateNo,
-      receiverContact: extra?.receiverContact,
-      receiverPhone: extra?.receiverPhone,
-      weightKg: extra?.weightKg,
-      notes,
-    };
+    try {
+      const order = orders.find((o) => o.id === orderId);
+      if (order) {
+        validateStateTransition('Order', orderId, order.status, ['approved', 'dispatched'], 'Dispatch / Create Delivery');
+      }
 
-    // Mark order as dispatched and update productionStage to ready_for_dispatch
-    if (order) {
-      const updatedOrder: Order = {
-        ...order,
-        status: 'dispatched',
-        productionStage: 'ready_for_dispatch',
-        isDispatched: true,
-        dispatchMethod: newDelivery.dispatchMethod,
-        waybillNumber: newDelivery.waybillNumber,
-        trackingNumber: newDelivery.trackingNumber,
+      // Check if an active delivery already exists for this order
+      const existingDel = deliveries.find((d) => d.orderId === orderId && d.status !== 'canceled');
+      if (existingDel) {
+        console.warn(`[DataContext] Active delivery #${existingDel.id} already exists for order #${orderId}.`);
+        idempotencyManager.markCompleted(reqId, existingDel);
+        return existingDel;
+      }
+
+      const generatedTracking = trackingNumber || extra?.waybillNumber || `MB-TRACK-${Math.floor(100000 + Math.random() * 900000)}`;
+      const newDelivery: Delivery = {
+        id: `del-${Date.now().toString().slice(-6)}`,
+        orderId,
+        branchId: order ? order.branchId : '',
+        address,
+        status: 'pending',
+        scheduledAt: scheduledAt || new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString(),
+        courierName: courierName || (extra?.dispatchMethod === 'jt_express' ? 'J&T Express Philippines' : 'Central Logistics Fleet'),
+        dispatchMethod: extra?.dispatchMethod || (courierName?.toLowerCase().includes('j&t') ? 'jt_express' : 'company_driver'),
+        trackingNumber: generatedTracking,
+        waybillNumber: extra?.waybillNumber || generatedTracking,
+        jtSortingCode: extra?.jtSortingCode,
+        driverName: extra?.driverName,
+        vehiclePlateNo: extra?.vehiclePlateNo,
+        receiverContact: extra?.receiverContact,
+        receiverPhone: extra?.receiverPhone,
+        weightKg: extra?.weightKg,
+        notes,
       };
-      setOrders((prev) => prev.map((o) => (o.id === orderId ? updatedOrder : o)));
-      firestoreSync.saveDoc('orders', orderId, updatedOrder);
-    }
 
-    setDeliveries((prev) => [newDelivery, ...prev]);
-    firestoreSync.saveDoc('deliveries', newDelivery.id, newDelivery);
-    return newDelivery;
+      // Mark order as dispatched and update productionStage to ready_for_dispatch
+      if (order) {
+        const updatedOrder: Order = {
+          ...order,
+          status: 'dispatched',
+          productionStage: 'ready_for_dispatch',
+          isDispatched: true,
+          dispatchMethod: newDelivery.dispatchMethod,
+          waybillNumber: newDelivery.waybillNumber,
+          trackingNumber: newDelivery.trackingNumber,
+        };
+        setOrders((prev) => prev.map((o) => (o.id === orderId ? updatedOrder : o)));
+        firestoreSync.saveDoc('orders', orderId, updatedOrder);
+      }
+
+      setDeliveries((prev) => [newDelivery, ...prev]);
+      firestoreSync.saveDoc('deliveries', newDelivery.id, { ...newDelivery, clientRequestId: reqId });
+
+      // Automatically broadcast notification for dispatched order
+      const dispatchAnn: Announcement = {
+        id: `ann-dispatch-${orderId}-${Date.now()}`,
+        title: `🚚 Order #${orderId} Dispatched for Delivery`,
+        message: `Order #${orderId} ${order ? `for ${order.branchName}` : ''} has been dispatched via ${newDelivery.courierName} (Waybill / Tracking: ${newDelivery.trackingNumber}).`,
+        createdAt: new Date().toISOString(),
+      };
+      setAnnouncements((prev) => [dispatchAnn, ...prev.filter((a) => a.id !== dispatchAnn.id)]);
+      firestoreSync.saveDoc('announcements', dispatchAnn.id, dispatchAnn);
+
+      if (order) {
+        logBranchAudit(
+          order.branchId,
+          order.branchName,
+          'ORDER_DISPATCHED',
+          currentUser?.name || 'Central Logistics Fleet',
+          `Order #${orderId} dispatched via ${newDelivery.courierName}. Waybill: ${newDelivery.trackingNumber}.`
+        );
+      }
+
+      idempotencyManager.markCompleted(reqId, newDelivery);
+      return newDelivery;
+    } catch (err: any) {
+      idempotencyManager.markFailed(reqId, err?.message);
+      throw err;
+    }
   };
 
   const updateDeliveryStatus = (deliveryId: string, status: DeliveryStatus, deliveredAt?: string) => {
@@ -2203,6 +2412,32 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return d;
       })
     );
+
+    // Auto-broadcast when delivery is completed
+    if (status === 'delivered') {
+      const targetDel = deliveries.find((d) => d.id === deliveryId);
+      if (targetDel && targetDel.orderId) {
+        const ord = orders.find((o) => o.id === targetDel.orderId);
+        const delivAnn: Announcement = {
+          id: `ann-delivered-${targetDel.orderId}-${Date.now()}`,
+          title: `✅ Order #${targetDel.orderId} Delivery Confirmed`,
+          message: `Delivery for Order #${targetDel.orderId} ${ord ? `(${ord.branchName})` : ''} has arrived and is confirmed delivered. Branch stock has been made available for receiving verification.`,
+          createdAt: new Date().toISOString(),
+        };
+        setAnnouncements((prev) => [delivAnn, ...prev.filter((a) => a.id !== delivAnn.id)]);
+        firestoreSync.saveDoc('announcements', delivAnn.id, delivAnn);
+
+        if (ord) {
+          logBranchAudit(
+            ord.branchId,
+            ord.branchName,
+            'DELIVERY_CONFIRMED',
+            currentUser?.name || 'Central Logistics Fleet',
+            `Delivery for Order #${targetDel.orderId} confirmed delivered.`
+          );
+        }
+      }
+    }
   };
 
   const cancelDelivery = (deliveryId: string, reason?: string) => {
@@ -2302,6 +2537,11 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const nowIso = new Date().toISOString();
 
     const existing = receivings.find((r) => r.deliveryId === deliveryId);
+    if (existing && existing.status === 'received' && status === 'received') {
+      console.warn(`[DataContext] Delivery #${deliveryId} has already been marked as received. Stock-in already completed.`);
+      return;
+    }
+
     if (existing) {
       updateReceivingStatus(existing.id, status, conditionNotes, receiverName);
     } else {
@@ -2372,7 +2612,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
               productName: prodName,
               type: 'Commissary Stock-In',
               quantity: item.quantity,
-              previousStock,
+              previousStock: prevStock,
               newStock,
               referenceNo: del?.trackingNumber || del?.id || order.id,
               performedBy: receiverName || currentUser?.name || 'Branch Receiver',
@@ -2758,244 +2998,275 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     cashierName?: string;
     amountTendered?: number;
     customerName?: string;
+    clientRequestId?: string;
   }): { receipt: BIRReceipt; change: number } => {
-    const branchId = currentUser?.branchId || currentBranch?.id || 'b-legazpi';
-    const branch = branches.find((b) => b.id === branchId) || currentBranch || branches[0];
-
-    if (!payload.items || payload.items.length === 0) {
-      throw new Error('Transaction cart is empty. Add products before processing.');
-    }
-
-    // 1. Verify stock availability (Prevent negative inventory)
-    for (const item of payload.items) {
-      const prod = products.find((p) => p.id === item.productId);
-      const inv = inventory.find((i) => i.branchId === branchId && i.productId === item.productId);
-      const stock = inv ? inv.stock : 0;
-      if (item.quantity > stock) {
-        throw new Error(
-          `Insufficient stock for ${prod?.flavor || 'item'}. Available: ${stock}, Requested: ${item.quantity}`
-        );
+    const clientRequestId = payload.clientRequestId || generateClientRequestId('req_pos');
+    const lock = idempotencyManager.acquireLock(clientRequestId);
+    if (!lock.acquired) {
+      if (lock.existingRecord?.result) {
+        return lock.existingRecord.result as { receipt: BIRReceipt; change: number };
       }
+      throw new Error('POS transaction is currently being processed. Please wait for completion.');
     }
 
-    // 2. Determine sequential receipt number for this branch
-    const branchIndex = Math.max(0, branches.findIndex((b) => b.id === branchId));
-    const branchCodeNum = String(branchIndex + 1).padStart(3, '0');
-    const year = new Date().getFullYear();
-    const branchReceipts = birReceipts.filter((r) => r.branchId === branchId);
-    const nextSeq = branchReceipts.length + 1;
-    const receiptNumber = `BR${branchCodeNum}-${year}-${String(nextSeq).padStart(6, '0')}`;
+    try {
+      const branchId = currentUser?.branchId || currentBranch?.id || 'b-legazpi';
+      const branch = branches.find((b) => b.id === branchId) || currentBranch || branches[0];
 
-    // 3. Compute Gross, Discount, Net, and VAT statutory breakdown
-    let grossSales = 0;
-    const transactionItems: POSTransactionItem[] = payload.items.map((it) => {
-      const prod = products.find((p) => p.id === it.productId);
-      const unitPrice = it.unitPrice !== undefined ? it.unitPrice : prod?.price || 149;
-      const grossAmount = it.quantity * unitPrice;
-      grossSales += grossAmount;
-      return {
-        productId: it.productId,
-        productName: prod?.name || 'Gourmet Marshmallow',
-        flavor: prod?.flavor || 'Standard Flavor',
-        barcode: `MB-${it.productId.toUpperCase()}-01`,
-        quantity: it.quantity,
-        unitPrice,
-        grossAmount,
-        discountAmount: 0,
-        netAmount: grossAmount,
-        isVatExempt: payload.discountType === 'pwd_senior',
-      };
-    });
+      if (!payload.items || payload.items.length === 0) {
+        throw new Error('Transaction cart is empty. Add products before processing.');
+      }
 
-    let discountAmount = 0;
-    let vatableSales = 0;
-    let vatAmount = 0;
-    let vatExemptSales = 0;
-    const zeroRatedSales = 0;
-
-    if (payload.discountType === 'pwd_senior') {
-      // Senior / PWD statutory 20% discount + VAT Exemption:
-      // Net Base = Gross / 1.12
-      // 20% Discount = Net Base * 0.20
-      // Payable Net = Net Base - Discount
-      const netBase = grossSales / 1.12;
-      discountAmount = Math.round(netBase * 0.2);
-      vatExemptSales = Math.round(netBase - discountAmount);
-      vatableSales = 0;
-      vatAmount = 0;
-    } else if (payload.discountType === 'promo10') {
-      discountAmount = Math.round(grossSales * 0.1);
-      const net = grossSales - discountAmount;
-      vatableSales = Math.round((net / 1.12) * 100) / 100;
-      vatAmount = Math.round((net - vatableSales) * 100) / 100;
-    } else if (payload.discountType === 'promo15') {
-      discountAmount = Math.round(grossSales * 0.15);
-      const net = grossSales - discountAmount;
-      vatableSales = Math.round((net / 1.12) * 100) / 100;
-      vatAmount = Math.round((net - vatableSales) * 100) / 100;
-    } else if (payload.discountType === 'custom') {
-      discountAmount = Math.min(grossSales, payload.customDiscountAmount || 0);
-      const net = grossSales - discountAmount;
-      vatableSales = Math.round((net / 1.12) * 100) / 100;
-      vatAmount = Math.round((net - vatableSales) * 100) / 100;
-    } else {
-      const net = grossSales;
-      vatableSales = Math.round((net / 1.12) * 100) / 100;
-      vatAmount = Math.round((net - vatableSales) * 100) / 100;
-    }
-
-    const netSales = Math.max(0, grossSales - discountAmount);
-
-    // 4. Validate Payments & Tender Calculation
-    const totalPaid = payload.payments.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
-    const amountTendered = payload.amountTendered !== undefined ? payload.amountTendered : totalPaid;
-    const hasCashPayment = payload.payments.some((p) => p.method === 'Cash');
-    const change = hasCashPayment ? Math.max(0, amountTendered - netSales) : 0;
-
-    // 5. Deduct inventory & record movement records
-    const newMovements: InventoryMovementRecord[] = [];
-    setInventory((prev) => {
-      const nextInv = [...prev];
-      for (const it of payload.items) {
-        const idx = nextInv.findIndex(
-          (i) => i.branchId === branchId && i.productId === it.productId
-        );
-        if (idx !== -1) {
-          const prevStock = nextInv[idx].stock;
-          const newStock = Math.max(0, prevStock - it.quantity);
-          const updated = { ...nextInv[idx], stock: newStock };
-          nextInv[idx] = updated;
-          firestoreSync.saveDoc('inventory', updated.id, updated);
-
-          const prod = products.find((p) => p.id === it.productId);
-          const mov: InventoryMovementRecord = {
-            id: `mov-${Date.now()}-${it.productId}`,
-            branchId,
-            productId: it.productId,
-            productName: `${prod?.flavor || 'Flavor'} (${prod?.name || 'Product'})`,
-            type: 'POS Sale',
-            quantity: -it.quantity,
-            previousStock: prevStock,
-            newStock,
-            referenceNo: receiptNumber,
-            performedBy:
-              payload.cashierName ||
-              currentUser?.name ||
-              registerShift.cashierName ||
-              'Cashier',
-            timestamp: new Date().toISOString(),
-            notes: `Walk-in retail sale via ${payload.payments.map((p) => p.method).join(' + ')}`,
-          };
-          newMovements.push(mov);
-          firestoreSync.saveDoc('inventoryMovements', mov.id, mov);
+      // 1. Verify stock availability (Prevent negative inventory)
+      for (const item of payload.items) {
+        const prod = products.find((p) => p.id === item.productId);
+        const inv = inventory.find((i) => i.branchId === branchId && i.productId === item.productId);
+        const stock = inv ? inv.stock : 0;
+        if (item.quantity > stock) {
+          throw new Error(
+            `Insufficient stock for ${prod?.flavor || 'item'}. Available: ${stock}, Requested: ${item.quantity}`
+          );
         }
       }
-      return nextInv;
-    });
 
-    if (newMovements.length > 0) {
-      setInventoryMovements((prev) => [...newMovements, ...prev]);
-    }
+      // 2. Determine sequential receipt number for this branch
+      const branchIndex = Math.max(0, branches.findIndex((b) => b.id === branchId));
+      const branchCodeNum = String(branchIndex + 1).padStart(3, '0');
+      const year = new Date().getFullYear();
+      const branchReceipts = birReceipts.filter((r) => r.branchId === branchId);
+      const nextSeq = branchReceipts.length + 1;
+      const receiptNumber = `BR${branchCodeNum}-${year}-${String(nextSeq).padStart(6, '0')}`;
 
-    // 6. Build BIR Official Receipt object
-    const nowIso = new Date().toISOString();
-    const receipt: BIRReceipt = {
-      id: `rec-${branchId}-${Date.now()}`,
-      receiptNumber,
-      sequenceNumber: nextSeq,
-      branchId,
-      branchCode: branch?.code || `MB-${branchId.toUpperCase()}`,
-      branchName: branch?.name || 'Marsh Bites Branch',
-      branchAddress: branch?.location || 'Naga City, Bicol',
-      branchContact: branch?.contactNumber || '+63 917 554 1029',
-      terminalId: payload.terminalId || registerShift.terminalId || 'POS-01',
-      cashierId: currentUser?.id || `csh-${branchId}`,
-      cashierName:
-        payload.cashierName || currentUser?.name || registerShift.cashierName || 'Cashier',
-      timestamp: nowIso,
-      items: transactionItems,
-      grossSales,
-      discountType: payload.discountType,
-      discountAmount,
-      seniorPwdDetail: payload.seniorPwdDetail,
-      netSales,
-      vatableSales,
-      vatAmount,
-      vatExemptSales,
-      zeroRatedSales,
-      payments: payload.payments,
-      totalAmountTendered: amountTendered,
-      change,
-      status: 'completed',
-      syncedToCloud: true,
-    };
+      // 3. Compute Gross, Discount, Net, and VAT statutory breakdown
+      let grossSales = 0;
+      const transactionItems: POSTransactionItem[] = payload.items.map((it) => {
+        const prod = products.find((p) => p.id === it.productId);
+        const unitPrice = it.unitPrice !== undefined ? it.unitPrice : prod?.price || 149;
+        const grossAmount = it.quantity * unitPrice;
+        grossSales += grossAmount;
+        return {
+          productId: it.productId,
+          productName: prod?.name || 'Gourmet Marshmallow',
+          flavor: prod?.flavor || 'Standard Flavor',
+          barcode: `MB-${it.productId.toUpperCase()}-01`,
+          quantity: it.quantity,
+          unitPrice,
+          grossAmount,
+          discountAmount: 0,
+          netAmount: grossAmount,
+          isVatExempt: payload.discountType === 'pwd_senior',
+        };
+      });
 
-    setBirReceipts((prev) => [receipt, ...prev]);
-    firestoreSync.saveDoc('birReceipts', receipt.id, receipt);
+      let discountAmount = 0;
+      let vatableSales = 0;
+      let vatAmount = 0;
+      let vatExemptSales = 0;
+      const zeroRatedSales = 0;
 
-    // 7. Add legacy Sales records for backward compatibility with analytics
-    const createdSales: Sale[] = payload.items.map((it, idx) => {
-      const prod = products.find((p) => p.id === it.productId);
-      const itemGross = it.quantity * (it.unitPrice || prod?.price || 149);
-      const ratio = grossSales > 0 ? (grossSales - discountAmount) / grossSales : 1;
-      const itemNet = Math.round(itemGross * ratio);
-      const rawCustomerName = (payload.customerName || payload.seniorPwdDetail?.customerName || '').trim();
-      const sale: Sale = {
-        id: `sale-pos-${Date.now()}-${idx}`,
+      if (payload.discountType === 'pwd_senior') {
+        // Senior / PWD statutory 20% discount + VAT Exemption:
+        // Net Base = Gross / 1.12
+        // 20% Discount = Net Base * 0.20
+        // Payable Net = Net Base - Discount
+        const netBase = grossSales / 1.12;
+        discountAmount = Math.round(netBase * 0.2);
+        vatExemptSales = Math.round(netBase - discountAmount);
+        vatableSales = 0;
+        vatAmount = 0;
+      } else if (payload.discountType === 'promo10') {
+        discountAmount = Math.round(grossSales * 0.1);
+        const net = grossSales - discountAmount;
+        vatableSales = Math.round((net / 1.12) * 100) / 100;
+        vatAmount = Math.round((net - vatableSales) * 100) / 100;
+      } else if (payload.discountType === 'promo15') {
+        discountAmount = Math.round(grossSales * 0.15);
+        const net = grossSales - discountAmount;
+        vatableSales = Math.round((net / 1.12) * 100) / 100;
+        vatAmount = Math.round((net - vatableSales) * 100) / 100;
+      } else if (payload.discountType === 'custom') {
+        discountAmount = Math.min(grossSales, payload.customDiscountAmount || 0);
+        const net = grossSales - discountAmount;
+        vatableSales = Math.round((net / 1.12) * 100) / 100;
+        vatAmount = Math.round((net - vatableSales) * 100) / 100;
+      } else {
+        const net = grossSales;
+        vatableSales = Math.round((net / 1.12) * 100) / 100;
+        vatAmount = Math.round((net - vatableSales) * 100) / 100;
+      }
+
+      const netSales = Math.max(0, grossSales - discountAmount);
+
+      // 4. Validate Payments & Tender Calculation
+      const totalPaid = payload.payments.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
+      const amountTendered = payload.amountTendered !== undefined ? payload.amountTendered : totalPaid;
+      const hasCashPayment = payload.payments.some((p) => p.method === 'Cash');
+      const change = hasCashPayment ? Math.max(0, amountTendered - netSales) : 0;
+
+      // 5. Deduct inventory & record movement records
+      const newMovements: InventoryMovementRecord[] = [];
+      setInventory((prev) => {
+        const nextInv = [...prev];
+        for (const it of payload.items) {
+          const idx = nextInv.findIndex(
+            (i) => i.branchId === branchId && i.productId === it.productId
+          );
+          if (idx !== -1) {
+            const prevStock = nextInv[idx].stock;
+            const newStock = Math.max(0, prevStock - it.quantity);
+            const updated = { ...nextInv[idx], stock: newStock };
+            nextInv[idx] = updated;
+            firestoreSync.saveDoc('inventory', updated.id, updated);
+
+            const prod = products.find((p) => p.id === it.productId);
+            const mov: InventoryMovementRecord = {
+              id: `mov-${Date.now()}-${it.productId}`,
+              branchId,
+              productId: it.productId,
+              productName: `${prod?.flavor || 'Flavor'} (${prod?.name || 'Product'})`,
+              type: 'POS Sale',
+              quantity: -it.quantity,
+              previousStock: prevStock,
+              newStock,
+              referenceNo: receiptNumber,
+              performedBy:
+                payload.cashierName ||
+                currentUser?.name ||
+                registerShift.cashierName ||
+                'Cashier',
+              timestamp: new Date().toISOString(),
+              notes: `Walk-in retail sale via ${payload.payments.map((p) => p.method).join(' + ')}`,
+            };
+            newMovements.push(mov);
+            firestoreSync.saveDoc('inventoryMovements', mov.id, mov);
+          }
+        }
+        return nextInv;
+      });
+
+      if (newMovements.length > 0) {
+        setInventoryMovements((prev) => [...newMovements, ...prev]);
+      }
+
+      // 6. Build BIR Official Receipt object
+      const nowIso = new Date().toISOString();
+      const receipt: BIRReceipt = {
+        id: `rec-${branchId}-${Date.now()}`,
+        receiptNumber,
+        sequenceNumber: nextSeq,
         branchId,
-        productId: it.productId,
-        productName: prod ? `${prod.flavor} (${prod.name})` : 'Gourmet Marshmallow Box',
-        quantity: it.quantity,
-        total: itemNet,
-        date: nowIso,
-        receiptPath: receiptNumber,
-        paymentMethod: payload.payments.map((p) => p.method).join(' + '),
-        amountTendered,
-        change,
-        discountAmount: Math.round(itemGross - itemNet),
+        branchCode: branch?.code || `MB-${branchId.toUpperCase()}`,
+        branchName: branch?.name || 'Marsh Bites Branch',
+        branchAddress: branch?.location || 'Naga City, Bicol',
+        branchContact: branch?.contactNumber || '+63 917 554 1029',
+        terminalId: payload.terminalId || registerShift.terminalId || 'POS-01',
+        cashierId: currentUser?.id || `csh-${branchId}`,
+        cashierName:
+          payload.cashierName || currentUser?.name || registerShift.cashierName || 'Cashier',
+        timestamp: nowIso,
+        items: transactionItems,
+        grossSales,
         discountType: payload.discountType,
-        customerName: rawCustomerName ? rawCustomerName : 'Walk-in Customer',
-        cashierName: receipt.cashierName,
-        source: 'VertexIS POS',
+        discountAmount,
+        seniorPwdDetail: payload.seniorPwdDetail,
+        netSales,
+        vatableSales,
+        vatAmount,
+        vatExemptSales,
+        zeroRatedSales,
+        payments: payload.payments,
+        totalAmountTendered: amountTendered,
+        change,
         status: 'completed',
+        syncedToCloud: true,
       };
-      firestoreSync.saveDoc('sales', sale.id, sale);
-      return sale;
-    });
-    setSales((prev) => [...createdSales, ...prev]);
 
-    // 8. Audit Log
-    logPOSAudit(
-      'SALE_PUNCH',
-      `Official receipt #${receiptNumber} generated for ₱${netSales.toLocaleString()} (${transactionItems.length} items). Tendered: ₱${amountTendered.toLocaleString()}`,
-      receiptNumber,
-      branchId
-    );
+      setBirReceipts((prev) => [receipt, ...prev]);
+      firestoreSync.saveDoc('birReceipts', receipt.id, { ...receipt, clientRequestId });
 
-    return { receipt, change };
+      // 7. Add legacy Sales records for backward compatibility with analytics
+      const createdSales: Sale[] = payload.items.map((it, idx) => {
+        const prod = products.find((p) => p.id === it.productId);
+        const itemGross = it.quantity * (it.unitPrice || prod?.price || 149);
+        const ratio = grossSales > 0 ? (grossSales - discountAmount) / grossSales : 1;
+        const itemNet = Math.round(itemGross * ratio);
+        const rawCustomerName = (payload.customerName || payload.seniorPwdDetail?.customerName || '').trim();
+        const sale: Sale = {
+          id: `sale-pos-${Date.now()}-${idx}`,
+          branchId,
+          productId: it.productId,
+          productName: prod ? `${prod.flavor} (${prod.name})` : 'Gourmet Marshmallow Box',
+          quantity: it.quantity,
+          total: itemNet,
+          date: nowIso,
+          receiptPath: receiptNumber,
+          paymentMethod: payload.payments.map((p) => p.method).join(' + '),
+          amountTendered,
+          change,
+          discountAmount: Math.round(itemGross - itemNet),
+          discountType: payload.discountType,
+          customerName: rawCustomerName ? rawCustomerName : 'Walk-in Customer',
+          cashierName: receipt.cashierName,
+          source: 'VertexIS POS',
+          status: 'completed',
+        };
+        firestoreSync.saveDoc('sales', sale.id, sale);
+        return sale;
+      });
+      setSales((prev) => [...createdSales, ...prev]);
+
+      // 8. Audit Log
+      logPOSAudit(
+        'SALE_PUNCH',
+        `Official receipt #${receiptNumber} generated for ₱${netSales.toLocaleString()} (${transactionItems.length} items). Tendered: ₱${amountTendered.toLocaleString()}`,
+        receiptNumber,
+        branchId
+      );
+
+      const result = { receipt, change };
+      idempotencyManager.markCompleted(clientRequestId, result);
+      return result;
+    } catch (err: any) {
+      idempotencyManager.markFailed(clientRequestId, err?.message);
+      throw err;
+    }
   };
 
   const voidPOSTransaction = (
     receiptId: string,
     managerPin: string,
     managerName: string,
-    voidReason: string
+    voidReason: string,
+    clientRequestId?: string
   ): { success: boolean; message?: string; receipt?: BIRReceipt } => {
+    const reqId = clientRequestId || generateClientRequestId(`req_void_${receiptId}`);
+    const lock = idempotencyManager.acquireLock(reqId);
+    if (!lock.acquired) {
+      if (lock.existingRecord?.result) {
+        return lock.existingRecord.result as { success: boolean; message?: string; receipt?: BIRReceipt };
+      }
+      return { success: false, message: 'Void request already in-flight.' };
+    }
+
     // Validate manager PIN (accepts supervisor pins: "1234", "8888", "9999", "admin123", "branch123", "0000")
     const validPins = ['1234', '8888', '9999', 'admin123', 'branch123', '0000'];
     if (!managerPin || !validPins.includes(managerPin.trim())) {
+      idempotencyManager.markFailed(reqId, 'Invalid PIN');
       return { success: false, message: 'Invalid Branch Manager Supervisor PIN authorization.' };
     }
 
     const target = birReceipts.find((r) => r.id === receiptId || r.receiptNumber === receiptId);
     if (!target) {
+      idempotencyManager.markFailed(reqId, 'Receipt not found');
       return { success: false, message: 'Receipt not found in transaction register.' };
     }
 
     if (target.status === 'voided') {
+      idempotencyManager.markCompleted(reqId, { success: false, message: 'Transaction has already been voided.' });
       return { success: false, message: 'Transaction has already been voided.' };
     }
     if (target.status === 'refunded') {
+      idempotencyManager.markCompleted(reqId, { success: false, message: 'Transaction has already been processed as a refund.' });
       return { success: false, message: 'Transaction has already been processed as a refund.' };
     }
 
@@ -3050,7 +3321,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     // 2. Update BIR Receipts list
     setBirReceipts((prev) => prev.map((r) => (r.id === target.id ? updatedReceipt : r)));
-    firestoreSync.saveDoc('birReceipts', updatedReceipt.id, updatedReceipt);
+    firestoreSync.saveDoc('birReceipts', updatedReceipt.id, { ...updatedReceipt, clientRequestId: reqId });
 
     // 3. Update legacy sales status
     setSales((prev) =>
@@ -3065,7 +3336,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       target.branchId
     );
 
-    return { success: true, receipt: updatedReceipt };
+    const result = { success: true, receipt: updatedReceipt };
+    idempotencyManager.markCompleted(reqId, result);
+    return result;
   };
 
   const refundPOSTransaction = (
@@ -3075,20 +3348,38 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     refundReason: string,
     refundMethod: POSPaymentMethod,
     restockInventory: boolean,
-    itemProductIds?: string[]
+    itemProductIds?: string[],
+    clientRequestId?: string
   ): { success: boolean; message?: string; refundAmount?: number } => {
+    const reqId = clientRequestId || generateClientRequestId(`req_refund_${receiptId}`);
+    const lock = idempotencyManager.acquireLock(reqId);
+    if (!lock.acquired) {
+      if (lock.existingRecord?.result) {
+        return lock.existingRecord.result as { success: boolean; message?: string; refundAmount?: number };
+      }
+      return { success: false, message: 'Refund request already in-flight.' };
+    }
+
     const validPins = ['1234', '8888', '9999', 'admin123', 'branch123', '0000'];
     if (!managerPin || !validPins.includes(managerPin.trim())) {
+      idempotencyManager.markFailed(reqId, 'Invalid PIN');
       return { success: false, message: 'Invalid Branch Manager Supervisor PIN authorization.' };
     }
 
     const target = birReceipts.find((r) => r.id === receiptId || r.receiptNumber === receiptId);
     if (!target) {
+      idempotencyManager.markFailed(reqId, 'Receipt not found');
       return { success: false, message: 'Original receipt not found.' };
     }
 
     if (target.status === 'voided') {
+      idempotencyManager.markCompleted(reqId, { success: false, message: 'Cannot refund a voided transaction.' });
       return { success: false, message: 'Cannot refund a voided transaction.' };
+    }
+
+    if (target.status === 'refunded') {
+      idempotencyManager.markCompleted(reqId, { success: false, message: 'Transaction has already been refunded.' });
+      return { success: false, message: 'Transaction has already been refunded.' };
     }
 
     const nowIso = new Date().toISOString();
@@ -3171,7 +3462,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     setBirReceipts((prev) => prev.map((r) => (r.id === target.id ? updatedReceipt : r)));
-    firestoreSync.saveDoc('birReceipts', updatedReceipt.id, updatedReceipt);
+    firestoreSync.saveDoc('birReceipts', updatedReceipt.id, { ...updatedReceipt, clientRequestId: reqId });
 
     setSales((prev) =>
       prev.map((s) => (s.receiptPath === target.receiptNumber ? { ...s, status: 'refunded' } : s))
@@ -3184,7 +3475,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       target.branchId
     );
 
-    return { success: true, refundAmount };
+    const result = { success: true, refundAmount };
+    idempotencyManager.markCompleted(reqId, result);
+    return result;
   };
 
   const getXReadingSummary = useCallback(
@@ -3274,83 +3567,105 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     managerApprovedBy: string;
     actualCash: number;
     cashBreakdown?: CashDenominationCount[];
+    manualBookletSeries?: string;
+    manualBookletTotal?: number;
+    manualBookletMatched?: boolean;
     notes?: string;
+    clientRequestId?: string;
   }): ShiftClosingRecord => {
-    const branchId = currentUser?.branchId || currentBranch?.id || 'b-legazpi';
-    const branch = branches.find((b) => b.id === branchId) || currentBranch || branches[0];
-    const summary = getXReadingSummary(branchId);
+    const reqId = payload.clientRequestId || generateClientRequestId('req_zread');
+    const lock = idempotencyManager.acquireLock(reqId);
+    if (!lock.acquired) {
+      if (lock.existingRecord?.result) {
+        return lock.existingRecord.result as ShiftClosingRecord;
+      }
+      throw new Error('Z-Reading closing submission is already in-flight.');
+    }
 
-    const branchClosings = shiftClosings.filter((c) => c.branchId === branchId);
-    const seq = branchClosings.length + 1;
-    const branchIndex = Math.max(0, branches.findIndex((b) => b.id === branchId));
-    const branchCodeNum = String(branchIndex + 1).padStart(3, '0');
-    const year = new Date().getFullYear();
-    const zReadingNumber = `ZR-BR${branchCodeNum}-${year}-${String(seq).padStart(5, '0')}`;
+    try {
+      const branchId = currentUser?.branchId || currentBranch?.id || 'b-legazpi';
+      const branch = branches.find((b) => b.id === branchId) || currentBranch || branches[0];
+      const summary = getXReadingSummary(branchId);
 
-    const previousAccumulatedGrandTotal =
-      branchClosings.length > 0 ? branchClosings[0].newAccumulatedGrandTotal : 154000;
-    const todayAccumulatedSales = summary.netSales;
-    const newAccumulatedGrandTotal = previousAccumulatedGrandTotal + todayAccumulatedSales;
+      const branchClosings = shiftClosings.filter((c) => c.branchId === branchId);
+      const seq = branchClosings.length + 1;
+      const branchIndex = Math.max(0, branches.findIndex((b) => b.id === branchId));
+      const branchCodeNum = String(branchIndex + 1).padStart(3, '0');
+      const year = new Date().getFullYear();
+      const zReadingNumber = `ZR-BR${branchCodeNum}-${year}-${String(seq).padStart(5, '0')}`;
 
-    const cashVariance = payload.actualCash - summary.expectedCash;
-    const nowIso = new Date().toISOString();
+      const previousAccumulatedGrandTotal =
+        branchClosings.length > 0 ? branchClosings[0].newAccumulatedGrandTotal : 154000;
+      const todayAccumulatedSales = summary.netSales;
+      const newAccumulatedGrandTotal = previousAccumulatedGrandTotal + todayAccumulatedSales;
 
-    const record: ShiftClosingRecord = {
-      id: `zr-${branchId}-${Date.now()}`,
-      zReadingNumber,
-      sequenceNumber: seq,
-      branchId,
-      branchCode: branch?.code || `MB-${branchId.toUpperCase()}`,
-      branchName: branch?.name || 'Marsh Bites Branch',
-      terminalId: registerShift.terminalId || 'POS-01',
-      cashierId: currentUser?.id || `csh-${branchId}`,
-      cashierName:
-        payload.cashierName || currentUser?.name || registerShift.cashierName || 'Cashier',
-      openedAt: registerShift.openedAt || new Date(new Date().setHours(9, 0, 0, 0)).toISOString(),
-      closedAt: nowIso,
-      openingFloat: summary.openingFloat,
-      cashSales: summary.cashSales,
-      digitalSales: summary.digitalSales,
-      cardSales: summary.cardSales,
-      bankTransferSales: summary.bankTransferSales,
-      totalGrossSales: summary.grossSales,
-      totalDiscounts: summary.totalDiscounts,
-      totalVatAmount: summary.vatAmount,
-      totalVatableSales: summary.vatableSales,
-      totalVatExemptSales: summary.vatExemptSales,
-      totalZeroRatedSales: summary.zeroRatedSales,
-      totalNetSales: summary.netSales,
-      totalTransactions: summary.transactionsCount,
-      beginningReceiptNo: summary.beginningReceiptNo,
-      endingReceiptNo: summary.endingReceiptNo,
-      totalVoids: summary.voidsCount,
-      totalVoidAmount: summary.voidAmount,
-      totalRefunds: summary.refundsCount,
-      totalRefundAmount: summary.refundAmount,
-      expectedCash: summary.expectedCash,
-      actualCash: payload.actualCash,
-      cashVariance,
-      cashBreakdown: payload.cashBreakdown || [],
-      previousAccumulatedGrandTotal,
-      todayAccumulatedSales,
-      newAccumulatedGrandTotal,
-      managerApprovedBy: payload.managerApprovedBy,
-      notes: payload.notes,
-      syncedToCloud: true,
-    };
+      const cashVariance = payload.actualCash - summary.expectedCash;
+      const nowIso = new Date().toISOString();
 
-    setShiftClosings((prev) => [record, ...prev]);
-    firestoreSync.saveDoc('shiftClosings', record.id, record);
+      const record: ShiftClosingRecord = {
+        id: `zr-${branchId}-${Date.now()}`,
+        zReadingNumber,
+        sequenceNumber: seq,
+        branchId,
+        branchCode: branch?.code || `MB-${branchId.toUpperCase()}`,
+        branchName: branch?.name || 'Marsh Bites Branch',
+        terminalId: registerShift.terminalId || 'POS-01',
+        cashierId: currentUser?.id || `csh-${branchId}`,
+        cashierName:
+          payload.cashierName || currentUser?.name || registerShift.cashierName || 'Cashier',
+        openedAt: registerShift.openedAt || new Date(new Date().setHours(9, 0, 0, 0)).toISOString(),
+        closedAt: nowIso,
+        openingFloat: summary.openingFloat,
+        cashSales: summary.cashSales,
+        digitalSales: summary.digitalSales,
+        cardSales: summary.cardSales,
+        bankTransferSales: summary.bankTransferSales,
+        totalGrossSales: summary.grossSales,
+        totalDiscounts: summary.totalDiscounts,
+        totalVatAmount: summary.vatAmount,
+        totalVatableSales: summary.vatableSales,
+        totalVatExemptSales: summary.vatExemptSales,
+        totalZeroRatedSales: summary.zeroRatedSales,
+        totalNetSales: summary.netSales,
+        totalTransactions: summary.transactionsCount,
+        beginningReceiptNo: summary.beginningReceiptNo,
+        endingReceiptNo: summary.endingReceiptNo,
+        totalVoids: summary.voidsCount,
+        totalVoidAmount: summary.voidAmount,
+        totalRefunds: summary.refundsCount,
+        totalRefundAmount: summary.refundAmount,
+        expectedCash: summary.expectedCash,
+        actualCash: payload.actualCash,
+        cashVariance,
+        cashBreakdown: payload.cashBreakdown || [],
+        previousAccumulatedGrandTotal,
+        todayAccumulatedSales,
+        newAccumulatedGrandTotal,
+        managerApprovedBy: payload.managerApprovedBy,
+        manualBookletSeries: payload.manualBookletSeries,
+        manualBookletTotal: payload.manualBookletTotal,
+        manualBookletMatched: payload.manualBookletMatched,
+        notes: payload.notes,
+        syncedToCloud: true,
+      };
 
-    // Log End of day closing in POS audit
-    logPOSAudit(
-      'Z_READING_CLOSE',
-      `Official End-of-Day Z-Reading #${zReadingNumber} filed by ${payload.cashierName}, approved by ${payload.managerApprovedBy}. Net Sales: ₱${summary.netSales.toLocaleString()}, Variance: ₱${cashVariance.toLocaleString()}`,
-      zReadingNumber,
-      branchId
-    );
+      setShiftClosings((prev) => [record, ...prev]);
+      firestoreSync.saveDoc('shiftClosings', record.id, { ...record, clientRequestId: reqId });
 
-    return record;
+      // Log End of day closing in POS audit
+      logPOSAudit(
+        'Z_READING_CLOSE',
+        `Daily Counter Shift Closing #${zReadingNumber} filed by ${payload.cashierName}, approved by ${payload.managerApprovedBy}. VertexIS Sales: ₱${summary.netSales.toLocaleString()}, Manual Booklet Series: ${payload.manualBookletSeries || 'Standard Series'}, Booklet Total: ₱${(payload.manualBookletTotal ?? summary.netSales).toLocaleString()}, Cash Variance: ₱${cashVariance.toLocaleString()}`,
+        zReadingNumber,
+        branchId
+      );
+
+      idempotencyManager.markCompleted(reqId, record);
+      return record;
+    } catch (err: any) {
+      idempotencyManager.markFailed(reqId, err?.message);
+      throw err;
+    }
   };
 
   const getReceiptsForBranch = useCallback(
@@ -3552,6 +3867,18 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     () => orders.filter((o) => o.status === 'waitingApproval' || o.status === 'pending').length,
     [orders]
   );
+  const readyForDispatchOrdersCount = useMemo(
+    () =>
+      orders.filter(
+        (o) =>
+          (o.status === 'approved' || (o.productionStage as string) === 'ready_for_dispatch') &&
+          (o.productionStage === 'ready_for_dispatch' || (o.productionStage as string) === 'ready') &&
+          !o.isDispatched &&
+          o.status !== 'completed' &&
+          o.status !== 'rejected'
+      ).length,
+    [orders]
+  );
 
   return (
     <DataContext.Provider
@@ -3653,6 +3980,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         madeToOrderDemand,
         totalRevenue,
         pendingOrdersCount,
+        readyForDispatchOrdersCount,
         // BIR POS Module properties & methods
         birReceipts,
         shiftClosings,

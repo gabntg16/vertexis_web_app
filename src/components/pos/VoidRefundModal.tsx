@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useData } from '../../context/DataContext';
 import { BIRReceipt, POSPaymentMethod } from '../../types';
+import { generateClientRequestId } from '../../utils/idempotency';
 import {
   X,
   AlertTriangle,
@@ -10,6 +11,7 @@ import {
   CheckCircle2,
   Package,
   Trash2,
+  Loader2,
 } from 'lucide-react';
 
 interface VoidRefundModalProps {
@@ -25,6 +27,8 @@ export const VoidRefundModal: React.FC<VoidRefundModalProps> = ({
 }) => {
   const { voidPOSTransaction, refundPOSTransaction, currentUser } = useData();
 
+  const [clientRequestId] = useState<string>(() => generateClientRequestId('req_void_refund'));
+  const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [mode, setMode] = useState<'void' | 'refund'>('void');
   const [managerPin, setManagerPin] = useState('');
   const [managerName, setManagerName] = useState(
@@ -52,6 +56,7 @@ export const VoidRefundModal: React.FC<VoidRefundModalProps> = ({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
     setErrorMsg(null);
 
     if (!reason.trim()) {
@@ -64,38 +69,46 @@ export const VoidRefundModal: React.FC<VoidRefundModalProps> = ({
       return;
     }
 
-    if (mode === 'void') {
-      const result = voidPOSTransaction(receipt.id, managerPin, managerName, reason.trim());
-      if (result.success) {
-        onSuccess(`Receipt #${receipt.receiptNumber} successfully VOIDED. Inventory restored.`);
-        onClose();
+    setIsSubmitting(true);
+    try {
+      if (mode === 'void') {
+        const result = voidPOSTransaction(receipt.id, managerPin, managerName, reason.trim(), clientRequestId);
+        if (result.success) {
+          onSuccess(`Receipt #${receipt.receiptNumber} successfully VOIDED. Inventory restored.`);
+          onClose();
+        } else {
+          setErrorMsg(result.message || 'Failed to void transaction');
+        }
       } else {
-        setErrorMsg(result.message || 'Failed to void transaction');
-      }
-    } else {
-      if (selectedItems.length === 0) {
-        setErrorMsg('Please select at least one item to refund.');
-        return;
-      }
-      const result = refundPOSTransaction(
-        receipt.id,
-        managerPin,
-        managerName,
-        reason.trim(),
-        refundMethod,
-        restockInventory,
-        selectedItems
-      );
-      if (result.success) {
-        onSuccess(
-          `Refund of ₱${result.refundAmount?.toLocaleString()} processed for OR #${
-            receipt.receiptNumber
-          }.`
+        if (selectedItems.length === 0) {
+          setErrorMsg('Please select at least one item to refund.');
+          return;
+        }
+        const result = refundPOSTransaction(
+          receipt.id,
+          managerPin,
+          managerName,
+          reason.trim(),
+          refundMethod,
+          restockInventory,
+          selectedItems,
+          clientRequestId
         );
-        onClose();
-      } else {
-        setErrorMsg(result.message || 'Failed to process refund');
+        if (result.success) {
+          onSuccess(
+            `Refund of ₱${result.refundAmount?.toLocaleString()} processed for Order Slip #${
+              receipt.receiptNumber
+            }.`
+          );
+          onClose();
+        } else {
+          setErrorMsg(result.message || 'Failed to process refund');
+        }
       }
+    } catch (err: any) {
+      setErrorMsg(err.message || 'An unexpected error occurred during void/refund.');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -113,7 +126,7 @@ export const VoidRefundModal: React.FC<VoidRefundModalProps> = ({
               <h3 className="text-sm font-bold text-neutral-900 dark:text-neutral-100">
                 Transaction Void & Refund Authorization
               </h3>
-              <p className="text-xs text-neutral-500 font-mono">OR #{receipt.receiptNumber}</p>
+              <p className="text-xs text-neutral-500 font-mono">Slip #{receipt.receiptNumber}</p>
             </div>
           </div>
           <button
@@ -314,20 +327,27 @@ export const VoidRefundModal: React.FC<VoidRefundModalProps> = ({
           <div className="flex items-center justify-end space-x-2 pt-2 border-t border-neutral-200 dark:border-neutral-800">
             <button
               type="button"
+              disabled={isSubmitting}
               onClick={onClose}
-              className="px-4 py-2 text-xs font-medium text-neutral-700 dark:text-neutral-300 hover:bg-neutral-200 dark:hover:bg-neutral-700 rounded-lg transition-colors"
+              className="px-4 py-2 text-xs font-medium text-neutral-700 dark:text-neutral-300 hover:bg-neutral-200 dark:hover:bg-neutral-700 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Cancel
             </button>
             <button
               type="submit"
-              className={`px-5 py-2 text-xs font-bold text-white rounded-lg flex items-center space-x-1.5 transition-colors shadow-xs ${
+              disabled={isSubmitting}
+              className={`px-5 py-2 text-xs font-bold text-white rounded-lg flex items-center space-x-1.5 transition-colors shadow-xs disabled:opacity-60 disabled:cursor-not-allowed ${
                 mode === 'void'
                   ? 'bg-red-600 hover:bg-red-700'
                   : 'bg-amber-600 hover:bg-amber-700'
               }`}
             >
-              {mode === 'void' ? (
+              {isSubmitting ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  <span>Processing Authorization...</span>
+                </>
+              ) : mode === 'void' ? (
                 <>
                   <Ban className="w-3.5 h-3.5" />
                   <span>Authorize Void Transaction</span>

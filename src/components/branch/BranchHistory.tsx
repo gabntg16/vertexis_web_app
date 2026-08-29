@@ -22,7 +22,7 @@ export const BranchHistory: React.FC = () => {
   const totalUnits = filteredSales.reduce((sum, s) => sum + s.quantity, 0);
 
   const handleExportCSV = () => {
-    const headers = ['Receipt #', 'Product Flavor', 'Quantity', 'Total (PHP)', 'Timestamp'];
+    const headers = ['Order Slip #', 'Product Flavor', 'Quantity', 'Total (PHP)', 'Timestamp'];
     const rows = filteredSales.map((s) => [
       s.receiptPath || s.id,
       `"${s.productName.replace(/"/g, '""')}"`,
@@ -49,9 +49,9 @@ export const BranchHistory: React.FC = () => {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-black tracking-tight">Branch Transaction History</h1>
+          <h1 className="text-2xl font-black tracking-tight">Branch Order Slip History</h1>
           <p className="text-xs text-neutral-500 font-medium">
-            Complete transaction ledger of customer sales recorded at {currentBranch.name}.
+            Complete transaction ledger of internal order slips and customer sales recorded at {currentBranch.name}.
           </p>
         </div>
 
@@ -74,7 +74,7 @@ export const BranchHistory: React.FC = () => {
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search receipt code or flavor name..."
+            placeholder="Search order slip code or flavor name..."
             className={`w-full pl-10 pr-4 py-2.5 rounded-xl text-sm border focus:outline-none focus:ring-2 focus:ring-[#80C7F2] ${
               isDark
                 ? 'bg-[#161616] border-neutral-800 text-white placeholder-neutral-500'
@@ -101,7 +101,7 @@ export const BranchHistory: React.FC = () => {
               isDark ? 'bg-neutral-900/80 border-neutral-800' : 'bg-neutral-50 border-neutral-200'
             }`}>
               <tr>
-                <th className="py-3.5 px-4">Receipt Number</th>
+                <th className="py-3.5 px-4">Order Slip Ref</th>
                 <th className="py-3.5 px-4">Date & Time</th>
                 <th className="py-3.5 px-4">Item Sold</th>
                 <th className="py-3.5 px-4 text-center">Quantity</th>

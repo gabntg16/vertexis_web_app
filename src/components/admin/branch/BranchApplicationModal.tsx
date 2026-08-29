@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { useData } from '../../../context/DataContext';
 import { BranchBusinessType, BranchDocument, DocumentType } from '../../../types';
+import { validateUploadedFile } from '../../../utils/fileValidation';
 import {
   X,
   Store,
@@ -132,6 +133,46 @@ export const BranchApplicationModal: React.FC<BranchApplicationModalProps> = ({
       .substring(0, 3)
       .toUpperCase();
     return `MB-${citySlug || 'PH'}-${String(branches.length + branchApplications.length + 1).padStart(2, '0')}`;
+  };
+
+  const [scanningDocType, setScanningDocType] = useState<DocumentType | null>(null);
+
+  const handleRealFileUpload = async (docConfig: RequiredDocConfig, e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setScanningDocType(docConfig.type);
+    setValidationError('');
+
+    try {
+      const validation = await validateUploadedFile(file, {
+        maxSizeBytes: 15 * 1024 * 1024,
+        allowedMimeTypes: ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'],
+        verifyImageDecodable: true,
+      });
+
+      if (!validation.isValid) {
+        setValidationError(`Security Error (${docConfig.title}): ${validation.error || 'File failed verification'}`);
+        return;
+      }
+
+      const fileSize = `${(file.size / (1024 * 1024)).toFixed(2)} MB`;
+      setUploadedFiles((prev) => [
+        ...prev.filter((f) => f.type !== docConfig.type),
+        {
+          type: docConfig.type,
+          title: docConfig.title,
+          fileName: file.name,
+          fileSize,
+          fileUrl: validation.dataUrl || `https://storage.vertexis.marshbites.internal/compliance/${file.name}`,
+          fileType: validation.detectedMimeType || file.type,
+        },
+      ]);
+    } catch (err: any) {
+      setValidationError(`Upload failed: ${err.message}`);
+    } finally {
+      setScanningDocType(null);
+    }
   };
 
   const handleMockFileUpload = (docConfig: RequiredDocConfig) => {
@@ -699,7 +740,7 @@ export const BranchApplicationModal: React.FC<BranchApplicationModalProps> = ({
                             </div>
                           </div>
 
-                          <div className="flex items-center space-x-2 self-end sm:self-center">
+                          <div className="flex flex-wrap items-center gap-2 self-end sm:self-center">
                             {uploaded ? (
                               <button
                                 type="button"
@@ -710,14 +751,30 @@ export const BranchApplicationModal: React.FC<BranchApplicationModalProps> = ({
                                 <span>Remove</span>
                               </button>
                             ) : (
-                              <button
-                                type="button"
-                                onClick={() => handleMockFileUpload(doc)}
-                                className="px-3 py-1.5 rounded-lg bg-[#80C7F2]/15 text-[#80C7F2] hover:bg-[#80C7F2]/25 text-xs font-bold transition-all flex items-center space-x-1.5"
-                              >
-                                <Upload className="w-3.5 h-3.5" />
-                                <span>Attach File</span>
-                              </button>
+                              <>
+                                <input
+                                  type="file"
+                                  id={`file-upload-${doc.type.replace(/\s+/g, '-')}`}
+                                  accept="image/png,image/jpeg,image/webp,application/pdf"
+                                  onChange={(e) => handleRealFileUpload(doc, e)}
+                                  className="hidden"
+                                />
+                                <label
+                                  htmlFor={`file-upload-${doc.type.replace(/\s+/g, '-')}`}
+                                  className="cursor-pointer px-3 py-1.5 rounded-lg bg-[#80C7F2]/15 text-[#80C7F2] hover:bg-[#80C7F2]/25 text-xs font-bold transition-all flex items-center space-x-1.5"
+                                >
+                                  <Upload className="w-3.5 h-3.5" />
+                                  <span>{scanningDocType === doc.type ? 'Scanning...' : 'Upload File'}</span>
+                                </label>
+                                <button
+                                  type="button"
+                                  onClick={() => handleMockFileUpload(doc)}
+                                  className="px-2.5 py-1.5 rounded-lg border border-neutral-700 hover:bg-neutral-800 text-neutral-400 text-xs font-medium transition-all"
+                                  title="Attach sample compliance document"
+                                >
+                                  <span>Preset</span>
+                                </button>
+                              </>
                             )}
                           </div>
                         </div>

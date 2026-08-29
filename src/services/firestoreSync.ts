@@ -49,6 +49,8 @@ export class FirestoreSyncService {
     lastSyncedAt: null,
   };
 
+  private processedRequestKeys = new Set<string>();
+
   private constructor() {}
 
   public static getInstance(): FirestoreSyncService {
@@ -56,6 +58,22 @@ export class FirestoreSyncService {
       FirestoreSyncService.instance = new FirestoreSyncService();
     }
     return FirestoreSyncService.instance;
+  }
+
+  /**
+   * Check if a request ID was already committed through the firestore sync layer
+   */
+  public isRequestIdProcessed(requestId: string): boolean {
+    if (!requestId) return false;
+    return this.processedRequestKeys.has(requestId);
+  }
+
+  /**
+   * Register processed request ID
+   */
+  public registerProcessedRequestId(requestId: string): void {
+    if (!requestId) return;
+    this.processedRequestKeys.add(requestId);
   }
 
   public onSyncStateChange(cb: (state: SyncState) => void): () => void {
@@ -372,6 +390,12 @@ export class FirestoreSyncService {
   // Generic Save Document to Firestore
   public async saveDoc(collectionName: string, id: string, data: any): Promise<void> {
     try {
+      if (data?.clientRequestId) {
+        this.processedRequestKeys.add(data.clientRequestId);
+      }
+      if (data?.idempotencyKey) {
+        this.processedRequestKeys.add(data.idempotencyKey);
+      }
       const sanitized = sanitizeForFirestore(data);
       const ref = doc(db, collectionName, id);
       await setDoc(ref, { ...sanitized, updatedAt: serverTimestamp() }, { merge: true });

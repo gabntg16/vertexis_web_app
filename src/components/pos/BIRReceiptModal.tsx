@@ -40,7 +40,7 @@ export const BIRReceiptModal: React.FC<BIRReceiptModalProps> = ({ receipt, onClo
             </div>
             <div>
               <h3 className="text-sm font-semibold text-neutral-900 dark:text-neutral-100">
-                Official BIR Sales Receipt
+                Internal Counter Order Slip
               </h3>
               <p className="text-xs text-neutral-500 font-mono">{receipt.receiptNumber}</p>
             </div>
@@ -51,7 +51,7 @@ export const BIRReceiptModal: React.FC<BIRReceiptModalProps> = ({ receipt, onClo
               className="px-3 py-1.5 bg-[#F37021] hover:bg-[#d95d14] text-white text-xs font-medium rounded-lg flex items-center space-x-1.5 shadow-xs transition-colors"
             >
               <Printer className="w-3.5 h-3.5" />
-              <span>Print Receipt</span>
+              <span>Print Order Slip</span>
             </button>
             <button
               onClick={onClose}
@@ -62,11 +62,21 @@ export const BIRReceiptModal: React.FC<BIRReceiptModalProps> = ({ receipt, onClo
           </div>
         </div>
 
-        {/* Printable Thermal Receipt Container */}
+        {/* Printable Thermal Slip Container */}
         <div className="p-6 max-h-[80vh] overflow-y-auto font-mono text-[13px] leading-relaxed text-neutral-800 dark:text-neutral-200 print:text-black print:max-h-none print:overflow-visible print:p-2">
           
+          {/* Prominent Non-OR Warning Banner */}
+          <div className="mb-3 p-2 bg-amber-50 dark:bg-amber-950/40 border-2 border-dashed border-amber-400 dark:border-amber-600 rounded-lg text-center print:border-black print:bg-neutral-100">
+            <p className="text-[11px] font-black tracking-wider text-amber-900 dark:text-amber-300 print:text-black uppercase">
+              *** THIS IS NOT AN OFFICIAL RECEIPT ***
+            </p>
+            <p className="text-[9.5px] font-sans font-medium text-amber-800 dark:text-amber-400 print:text-black">
+              Internal Counter Order & Branch Inventory Entry Slip
+            </p>
+          </div>
+
           {/* Header */}
-          <div className="text-center space-y-1 pb-4 border-b border-dashed border-neutral-300 dark:border-neutral-700 print:border-black">
+          <div className="text-center space-y-1 pb-3 border-b border-dashed border-neutral-300 dark:border-neutral-700 print:border-black">
             <h1 className="text-base font-bold tracking-tight text-neutral-900 dark:text-white print:text-black">
               THE MARSH BITES
             </h1>
@@ -82,17 +92,16 @@ export const BIRReceiptModal: React.FC<BIRReceiptModalProps> = ({ receipt, onClo
             <p className="text-[11px] text-neutral-500 dark:text-neutral-400 print:text-black">
               Tel: {receipt.branchContact}
             </p>
-            <div className="pt-2 text-[10px] text-neutral-400 dark:text-neutral-500 print:text-neutral-700">
-              <p>VAT REG TIN: 420-891-773-000</p>
-              <p>MIN: 240819003891 • POS SN: MB-2026-POS01</p>
-              <p>BIR ACCREDITATION: 042-2026-00084920</p>
+            <div className="pt-1.5 text-[10px] text-neutral-400 dark:text-neutral-500 print:text-neutral-700">
+              <p>INTERNAL COUNTER TERMINAL • {receipt.terminalId}</p>
+              <p className="text-[9px] italic">Non-Official Receipt (For Inventory & Cashier Log Only)</p>
             </div>
           </div>
 
           {/* Receipt Meta */}
           <div className="py-3 border-b border-dashed border-neutral-300 dark:border-neutral-700 text-xs space-y-1 print:border-black">
             <div className="flex justify-between">
-              <span className="text-neutral-500">OR No:</span>
+              <span className="text-neutral-500">Order Slip Ref:</span>
               <span className="font-bold text-neutral-900 dark:text-neutral-100 print:text-black">
                 {receipt.receiptNumber}
               </span>
@@ -225,14 +234,23 @@ export const BIRReceiptModal: React.FC<BIRReceiptModalProps> = ({ receipt, onClo
             </div>
           )}
 
-          {/* BIR Compliance Footer */}
-          <div className="text-center pt-4 space-y-1 text-[10px] text-neutral-500 dark:text-neutral-400 print:text-neutral-700">
+          {/* Tax Compliance Disclaimer Footer */}
+          <div className="text-center pt-4 space-y-2 text-[10px] text-neutral-500 dark:text-neutral-400 print:text-neutral-700">
             <p className="font-semibold text-neutral-700 dark:text-neutral-300 print:text-black">
               THANK YOU FOR VISITING THE MARSH BITES!
             </p>
-            <p>Please come again for freshly made gourmet marshmallows.</p>
-            <p className="pt-2 italic">"THIS SERVES AS AN OFFICIAL RECEIPT"</p>
-            <p className="text-[9px]">PTU No: FP052026-103-00921 • Valid Until: Dec 31, 2029</p>
+            
+            <div className="py-2.5 px-2 my-1 border-t-2 border-b-2 border-dashed border-neutral-300 dark:border-neutral-700 print:border-black text-center space-y-1">
+              <p className="font-bold text-[11px] text-red-600 dark:text-red-400 print:text-black tracking-wider uppercase">
+                *** THIS IS NOT AN OFFICIAL RECEIPT ***
+              </p>
+              <p className="text-[9.5px] leading-tight text-neutral-600 dark:text-neutral-400 print:text-black">
+                Generated by VertexIS for internal counter order entry, inventory deduction, and cashier shift reconciliation only.
+              </p>
+              <p className="text-[9px] text-neutral-500 dark:text-neutral-400 print:text-black italic">
+                (Official Sales Invoice / OR is issued via physical BIR-registered manual booklet)
+              </p>
+            </div>
           </div>
         </div>
 
@@ -249,7 +267,7 @@ export const BIRReceiptModal: React.FC<BIRReceiptModalProps> = ({ receipt, onClo
             className="px-4 py-2 text-xs font-medium bg-[#F37021] hover:bg-[#d95d14] text-white rounded-lg flex items-center space-x-1.5 transition-colors shadow-xs"
           >
             <Printer className="w-3.5 h-3.5" />
-            <span>Print Receipt</span>
+            <span>Print Order Slip</span>
           </button>
         </div>
 

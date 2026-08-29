@@ -6,6 +6,9 @@ import { XReadingModal } from '../pos/XReadingModal';
 import { ZReadingModal } from '../pos/ZReadingModal';
 import { VoidRefundModal } from '../pos/VoidRefundModal';
 import { POSAuditDrawer } from '../pos/POSAuditDrawer';
+import { CashTenderSafeguardModal, CashTenderSafeguardDetails } from '../safeguards/CashTenderSafeguardModal';
+import { HighDiscountSafeguardModal, HighDiscountSafeguardDetails } from '../safeguards/HighDiscountSafeguardModal';
+import { generateClientRequestId } from '../../utils/idempotency';
 import {
   paymentGatewayService,
   isMockPaymentMode,
@@ -49,6 +52,7 @@ import {
   Clock,
   Sparkles,
   Building2,
+  Loader2,
 } from 'lucide-react';
 
 interface CartItem {
@@ -85,9 +89,8 @@ export const BranchSalesPOS: React.FC = () => {
   // Active Tab: 'register' | 'receipts' | 'zreadings' | 'batchSync'
   const [activeTab, setActiveTab] = useState<'register' | 'receipts' | 'zreadings' | 'batchSync'>('register');
 
-  // Search, Barcode & Category Filters
+  // Search & Category Filters
   const [searchQuery, setSearchQuery] = useState('');
-  const [barcodeInput, setBarcodeInput] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
 
   // Cart State
@@ -103,6 +106,8 @@ export const BranchSalesPOS: React.FC = () => {
 
   // Payment Checkout Drawer / Modal
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
+  const [checkoutRequestId, setCheckoutRequestId] = useState<string>('');
+  const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [paymentMode, setPaymentMode] = useState<'single' | 'split'>('single');
   const [selectedMethod, setSelectedMethod] = useState<POSPaymentMethod>('Cash');
   const [cashTenderedInput, setCashTenderedInput] = useState<string>('');
@@ -122,6 +127,10 @@ export const BranchSalesPOS: React.FC = () => {
   const [showZReading, setShowZReading] = useState(false);
   const [showAuditDrawer, setShowAuditDrawer] = useState(false);
   const [voidRefundTargetReceipt, setVoidRefundTargetReceipt] = useState<BIRReceipt | null>(null);
+
+  // Safeguards
+  const [cashTenderSafeguard, setCashTenderSafeguard] = useState<CashTenderSafeguardDetails | null>(null);
+  const [highDiscountSafeguard, setHighDiscountSafeguard] = useState<HighDiscountSafeguardDetails | null>(null);
 
   // Notifications
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -340,30 +349,8 @@ export const BranchSalesPOS: React.FC = () => {
     setSplitSecondaryRef('');
   };
 
-  // Barcode scanning simulation handler
-  const handleBarcodeSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!barcodeInput.trim()) return;
-
-    const query = barcodeInput.trim().toLowerCase();
-    const matched = products.find(
-      (p) =>
-        p.id.toLowerCase() === query ||
-        p.flavor.toLowerCase().includes(query) ||
-        `mb-${p.id.toLowerCase()}-01` === query
-    );
-
-    if (matched) {
-      addToCart(matched);
-      setBarcodeInput('');
-    } else {
-      setErrorMsg(`No product found matching barcode or SKU "${barcodeInput}".`);
-      setTimeout(() => setErrorMsg(null), 4000);
-    }
-  };
-
   // Open Checkout
-  const handleOpenCheckout = () => {
+  const handleOpenCheckout = (bypassDiscountSafeguard: boolean = false) => {
     if (cart.length === 0) {
       setErrorMsg('Cart is empty. Select marshmallow flavors before proceeding to payment.');
       return;
@@ -372,6 +359,24 @@ export const BranchSalesPOS: React.FC = () => {
       setErrorMsg('Please input Senior Citizen / PWD Name and ID Number for statutory compliance.');
       return;
     }
+
+    // High-Value Discount Safeguard: if custom discount > 20% of grossSubtotal or netPayable <= 10
+    const isCustomHigh = discountType === 'custom' && customDiscountValue > Math.round(grossSubtotal * 0.2);
+    const isNearZero = netPayable <= 10 && grossSubtotal > 50;
+
+    if (!bypassDiscountSafeguard && (isCustomHigh || isNearZero)) {
+      setHighDiscountSafeguard({
+        isOpen: true,
+        grossSubtotal,
+        discountType,
+        discountAmount,
+        netPayable,
+        thresholdPercentage: 20,
+      });
+      return;
+    }
+
+    setCheckoutRequestId(generateClientRequestId('req_pos_checkout'));
     setCashTenderedInput(netPayable.toString());
     setSplitCashAmount(Math.floor(netPayable / 2).toString());
     setSplitSecondaryAmount((netPayable - Math.floor(netPayable / 2)).toString());
@@ -384,7 +389,8 @@ export const BranchSalesPOS: React.FC = () => {
   };
 
   // Finalize Transaction
-  const handleFinalizeTransaction = () => {
+  const handleFinalizeTransaction = (bypassTenderSafeguard: boolean = false) => {
+    if (isSubmitting) return;
     setErrorMsg(null);
 
     let paymentsPayload: POSPaymentDetail[] = [];
@@ -396,6 +402,21 @@ export const BranchSalesPOS: React.FC = () => {
           setErrorMsg(`Cash tendered (₱${singleCashNum}) is less than net due (₱${netPayable}).`);
           return;
         }
+
+        // POS Cash Tender Validation Safeguard (5x order total or >₱2,000 above total)
+        const diff = singleCashNum - netPayable;
+        const isExcessive = (netPayable > 0 && singleCashNum >= netPayable * 5) || diff > 2000;
+        if (!bypassTenderSafeguard && isExcessive) {
+          setCashTenderSafeguard({
+            isOpen: true,
+            orderTotal: netPayable,
+            cashTendered: singleCashNum,
+            changeDue,
+            paymentMode: 'single',
+          });
+          return;
+        }
+
         amountTenderedVal = singleCashNum;
       }
       paymentsPayload = [
@@ -411,6 +432,23 @@ export const BranchSalesPOS: React.FC = () => {
         setErrorMsg(`Total split tender (₱${splitTotalPaid}) is less than net payable (₱${netPayable}).`);
         return;
       }
+
+      // POS Cash Tender Validation Safeguard for Split Cash portion or split total
+      const splitDiff = splitTotalPaid - netPayable;
+      const isExcessive = (netPayable > 0 && splitTotalPaid >= netPayable * 5) || splitDiff > 2000;
+      if (!bypassTenderSafeguard && isExcessive) {
+        setCashTenderSafeguard({
+          isOpen: true,
+          orderTotal: netPayable,
+          cashTendered: splitTotalPaid,
+          changeDue: splitChangeDue,
+          paymentMode: 'split',
+          splitSecondaryMethod,
+          splitSecondaryAmount: splitSecNum,
+        });
+        return;
+      }
+
       amountTenderedVal = splitTotalPaid;
       paymentsPayload = [
         {
@@ -425,6 +463,7 @@ export const BranchSalesPOS: React.FC = () => {
       ];
     }
 
+    setIsSubmitting(true);
     try {
       let seniorDetailPayload: POSSeniorPwdDetail | undefined = undefined;
       if (discountType === 'pwd_senior') {
@@ -437,6 +476,7 @@ export const BranchSalesPOS: React.FC = () => {
         };
       }
 
+      const clientReqKey = checkoutRequestId || generateClientRequestId('req_pos_checkout');
       const { receipt } = processPOSTransaction({
         items: cart.map((i) => ({
           productId: i.product.id,
@@ -451,15 +491,18 @@ export const BranchSalesPOS: React.FC = () => {
         cashierName: currentUser?.name || registerShift.cashierName,
         amountTendered: amountTenderedVal,
         customerName: customerName || seniorPwdName || undefined,
+        clientRequestId: clientReqKey,
       });
 
       setIsCheckoutOpen(false);
       clearCart();
       setActiveReceiptForModal(receipt);
-      setSuccessMsg(`Official Receipt #${receipt.receiptNumber} punched! Inventory deducted & synced.`);
+      setSuccessMsg(`Internal Order Slip #${receipt.receiptNumber} recorded! Stock levels updated & branch sale logged.`);
       setTimeout(() => setSuccessMsg(null), 5000);
     } catch (err: any) {
       setErrorMsg(err.message || 'Failed to process transaction');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -472,7 +515,6 @@ export const BranchSalesPOS: React.FC = () => {
     setIsImporting(true);
     setErrorMsg(null);
     setImportResult(null);
-
     try {
       const lines = csvText.trim().split('\n');
       const parsedRows: Array<{
@@ -521,15 +563,15 @@ export const BranchSalesPOS: React.FC = () => {
         {/* Branch & Terminal Info */}
         <div className="flex items-center space-x-3.5">
           <div className="w-11 h-11 rounded-xl bg-orange-100 dark:bg-orange-950/60 text-[#F37021] flex items-center justify-center flex-shrink-0 shadow-xs">
-            <Barcode className="w-6 h-6" />
+            <Receipt className="w-6 h-6" />
           </div>
           <div>
             <div className="flex items-center space-x-2">
               <h2 className="text-base font-bold text-neutral-900 dark:text-neutral-100">
-                {currentBranch.name} POS Register
+                {currentBranch.name} Counter Terminal
               </h2>
-              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300">
-                TERMINAL {registerShift.terminalId} • BIR ACCREDITED
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300">
+                INTERNAL TERMINAL • NOT AN OFFICIAL RECEIPT
               </span>
             </div>
             <p className="text-xs text-neutral-500 flex items-center space-x-2 mt-0.5">
@@ -537,7 +579,7 @@ export const BranchSalesPOS: React.FC = () => {
               <span>•</span>
               <span>Shift Float: <strong>₱{registerShift.openingFloat.toLocaleString()}</strong></span>
               <span>•</span>
-              <span className="text-emerald-600 dark:text-emerald-400 font-medium">● Real-time Cloud Active</span>
+              <span className="text-emerald-600 dark:text-emerald-400 font-medium">● Real-time Inventory & Sales Sync</span>
             </p>
           </div>
         </div>
@@ -551,7 +593,7 @@ export const BranchSalesPOS: React.FC = () => {
             className="px-3 py-2 text-xs font-semibold rounded-xl bg-sky-50 dark:bg-sky-950/50 text-sky-700 dark:text-sky-300 border border-sky-200 dark:border-sky-800 hover:bg-sky-100 transition-colors flex items-center space-x-1.5 shadow-2xs"
           >
             <TrendingUp className="w-3.5 h-3.5" />
-            <span>X-Reading (Interim)</span>
+            <span>Interim Sales Audit</span>
           </button>
 
           <button
@@ -560,7 +602,7 @@ export const BranchSalesPOS: React.FC = () => {
             className="px-3 py-2 text-xs font-semibold rounded-xl bg-purple-50 dark:bg-purple-950/50 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800 hover:bg-purple-100 transition-colors flex items-center space-x-1.5 shadow-2xs"
           >
             <Lock className="w-3.5 h-3.5" />
-            <span>Z-Reading (End of Day)</span>
+            <span>Shift Closing & Booklet Match</span>
           </button>
 
           <button
@@ -584,7 +626,7 @@ export const BranchSalesPOS: React.FC = () => {
                   : 'text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200'
               }`}
             >
-              POS Register
+              Counter Terminal
             </button>
             <button
               onClick={() => setActiveTab('receipts')}
@@ -594,7 +636,7 @@ export const BranchSalesPOS: React.FC = () => {
                   : 'text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200'
               }`}
             >
-              Receipts ({branchReceipts.length})
+              Order Slips ({branchReceipts.length})
             </button>
             <button
               onClick={() => setActiveTab('zreadings')}
@@ -604,7 +646,7 @@ export const BranchSalesPOS: React.FC = () => {
                   : 'text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200'
               }`}
             >
-              Z-Closings ({branchZReadings.length})
+              Shift Closings ({branchZReadings.length})
             </button>
             <button
               onClick={() => setActiveTab('batchSync')}
@@ -655,47 +697,29 @@ export const BranchSalesPOS: React.FC = () => {
           {/* LEFT 7-COL: PRODUCT CATALOG & BARCODE SCANNER */}
           <div className="lg:col-span-7 space-y-4">
             
-            {/* Search & Barcode Quick Scan Bar */}
+            {/* Search & Filter Bar */}
             <div className="p-4 rounded-2xl bg-white dark:bg-neutral-900 border border-neutral-200/90 dark:border-neutral-800 shadow-xs space-y-3">
               <div className="flex flex-col sm:flex-row gap-2.5">
                 
                 {/* Search Product */}
                 <div className="relative flex-1">
-                  <Search className="w-4 h-4 text-neutral-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <Search className="w-4 h-4 text-neutral-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
                   <input
                     type="text"
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="Search marshmallow flavor (e.g. Ube, Matcha, Mango)..."
-                    className="w-full pl-9 pr-3 py-2 text-xs bg-neutral-50 dark:bg-neutral-800/80 border border-neutral-300 dark:border-neutral-700 rounded-xl focus:ring-2 focus:ring-[#F37021] focus:outline-hidden"
+                    placeholder="Search marshmallow flavor (e.g. Ube, Matcha, Mango, Strawberry)..."
+                    className="w-full pl-10 pr-9 py-2.5 text-xs bg-neutral-50 dark:bg-neutral-800/80 border border-neutral-300 dark:border-neutral-700 rounded-xl focus:ring-2 focus:ring-[#F37021] focus:outline-hidden"
                   />
                   {searchQuery && (
                     <button
                       onClick={() => setSearchQuery('')}
-                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-neutral-400 hover:text-neutral-600"
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-neutral-400 hover:text-neutral-600"
                     >
-                      <X className="w-3.5 h-3.5" />
+                      <X className="w-4 h-4" />
                     </button>
                   )}
                 </div>
-
-                {/* Barcode Scanner Input */}
-                <form onSubmit={handleBarcodeSubmit} className="relative w-full sm:w-56">
-                  <Barcode className="w-4 h-4 text-[#F37021] absolute left-3 top-1/2 -translate-y-1/2" />
-                  <input
-                    type="text"
-                    value={barcodeInput}
-                    onChange={(e) => setBarcodeInput(e.target.value)}
-                    placeholder="Scan Barcode / SKU"
-                    className="w-full pl-9 pr-8 py-2 text-xs font-mono bg-neutral-50 dark:bg-neutral-800/80 border border-neutral-300 dark:border-neutral-700 rounded-xl focus:ring-2 focus:ring-[#F37021] focus:outline-hidden"
-                  />
-                  <button
-                    type="submit"
-                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-neutral-400 hover:text-[#F37021]"
-                  >
-                    <ArrowRight className="w-3.5 h-3.5" />
-                  </button>
-                </form>
 
               </div>
 
@@ -1010,17 +1034,17 @@ export const BranchSalesPOS: React.FC = () => {
       )}
 
       {/* =========================================================================
-          TAB 2: COMPLETED OFFICIAL RECEIPTS (OR) HISTORY
+          TAB 2: COMPLETED INTERNAL ORDER SLIPS HISTORY
           ========================================================================= */}
       {activeTab === 'receipts' && (
         <div className="p-5 rounded-2xl bg-white dark:bg-neutral-900 border border-neutral-200/90 dark:border-neutral-800 shadow-xs space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-neutral-200 dark:border-neutral-800">
             <div>
               <h3 className="text-sm font-bold text-neutral-900 dark:text-neutral-100">
-                Official BIR Sales Receipts Log
+                Internal Counter Order Slips & Branch Sales Log
               </h3>
               <p className="text-xs text-neutral-500">
-                Sequential transaction register with permanent audit trail
+                Sequential counter transaction register with real-time stock deduction and permanent audit trail
               </p>
             </div>
           </div>
@@ -1029,7 +1053,7 @@ export const BranchSalesPOS: React.FC = () => {
             <table className="w-full text-xs text-left">
               <thead className="bg-neutral-50 dark:bg-neutral-800/60 text-neutral-500 uppercase tracking-wider text-[11px] font-semibold border-y border-neutral-200 dark:border-neutral-800">
                 <tr>
-                  <th className="py-2.5 px-3">Receipt OR No</th>
+                  <th className="py-2.5 px-3">Order Slip Ref</th>
                   <th className="py-2.5 px-3">Date & Time</th>
                   <th className="py-2.5 px-3">Cashier</th>
                   <th className="py-2.5 px-3">Items</th>
@@ -1043,7 +1067,7 @@ export const BranchSalesPOS: React.FC = () => {
                 {branchReceipts.length === 0 ? (
                   <tr>
                     <td colSpan={8} className="py-8 text-center text-neutral-400">
-                      No sales receipts generated yet for this branch.
+                      No counter order slips recorded yet for this branch.
                     </td>
                   </tr>
                 ) : (
@@ -1085,7 +1109,7 @@ export const BranchSalesPOS: React.FC = () => {
                           onClick={() => setActiveReceiptForModal(rec)}
                           className="px-2 py-1 bg-neutral-100 dark:bg-neutral-800 hover:bg-neutral-200 text-neutral-700 dark:text-neutral-300 rounded font-medium text-[11px]"
                         >
-                          View / Print
+                          View Slip
                         </button>
                         {rec.status === 'completed' && (
                           <button
@@ -1106,17 +1130,17 @@ export const BranchSalesPOS: React.FC = () => {
       )}
 
       {/* =========================================================================
-          TAB 3: Z-READING DAILY CLOSING AUDIT LEDGER
+          TAB 3: DAILY SHIFT SETTLEMENT & BOOKLET RECONCILIATION LEDGER
           ========================================================================= */}
       {activeTab === 'zreadings' && (
         <div className="p-5 rounded-2xl bg-white dark:bg-neutral-900 border border-neutral-200/90 dark:border-neutral-800 shadow-xs space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-neutral-200 dark:border-neutral-800">
             <div>
               <h3 className="text-sm font-bold text-neutral-900 dark:text-neutral-100">
-                End-of-Day Z-Reading Shift Closing Ledger
+                End-of-Day Shift Settlement & Manual Booklet Reconciliation Ledger
               </h3>
               <p className="text-xs text-neutral-500">
-                Permanent daily financial summaries with non-resettable accumulated grand totals
+                Permanent daily financial summaries with manual booklet reconciliation and accumulated grand totals
               </p>
             </div>
             <button
@@ -1124,7 +1148,7 @@ export const BranchSalesPOS: React.FC = () => {
               className="px-3.5 py-2 bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold rounded-xl flex items-center space-x-1.5 shadow-xs"
             >
               <Lock className="w-3.5 h-3.5" />
-              <span>Perform New Z-Reading Closing</span>
+              <span>Perform Shift Closing & Booklet Match</span>
             </button>
           </div>
 
@@ -1132,11 +1156,12 @@ export const BranchSalesPOS: React.FC = () => {
             <table className="w-full text-xs text-left">
               <thead className="bg-neutral-50 dark:bg-neutral-800/60 text-neutral-500 uppercase tracking-wider text-[11px] font-semibold border-y border-neutral-200 dark:border-neutral-800">
                 <tr>
-                  <th className="py-2.5 px-3">Z-Reading No</th>
+                  <th className="py-2.5 px-3">Closing No</th>
                   <th className="py-2.5 px-3">Closing Date</th>
                   <th className="py-2.5 px-3">Duty Cashier</th>
                   <th className="py-2.5 px-3">Approved By</th>
                   <th className="py-2.5 px-3 text-right">Net Sales</th>
+                  <th className="py-2.5 px-3">Manual Booklet Series</th>
                   <th className="py-2.5 px-3 text-right">Cash Counted</th>
                   <th className="py-2.5 px-3 text-center">Variance</th>
                   <th className="py-2.5 px-3 text-right">Accumulated Total</th>
@@ -1145,8 +1170,8 @@ export const BranchSalesPOS: React.FC = () => {
               <tbody className="divide-y divide-neutral-200 dark:divide-neutral-800">
                 {branchZReadings.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="py-8 text-center text-neutral-400">
-                      No shift closing Z-readings recorded yet.
+                    <td colSpan={9} className="py-8 text-center text-neutral-400">
+                      No shift closing settlements recorded yet.
                     </td>
                   </tr>
                 ) : (
@@ -1166,6 +1191,9 @@ export const BranchSalesPOS: React.FC = () => {
                       </td>
                       <td className="py-3 px-3 text-right font-bold text-neutral-900 dark:text-white">
                         ₱{zr.totalNetSales.toLocaleString()}
+                      </td>
+                      <td className="py-3 px-3 text-neutral-700 dark:text-neutral-300 font-mono text-[11px]">
+                        {zr.manualBookletSeries || 'Booklet #04 (OR #001250 - #001278)'}
                       </td>
                       <td className="py-3 px-3 text-right font-medium">
                         ₱{zr.actualCash.toLocaleString()}
@@ -1451,6 +1479,7 @@ export const BranchSalesPOS: React.FC = () => {
                               src={posQrCodeUrl}
                               alt={`${selectedMethod} QR`}
                               className="w-24 h-24 object-contain rounded"
+                              referrerPolicy="no-referrer"
                             />
                           ) : (
                             <div className="w-24 h-24 flex items-center justify-center text-[10px] text-neutral-400">
@@ -1600,18 +1629,29 @@ export const BranchSalesPOS: React.FC = () => {
               <div className="flex items-center justify-end space-x-3 pt-3 border-t border-neutral-200 dark:border-neutral-800">
                 <button
                   type="button"
+                  disabled={isSubmitting}
                   onClick={() => setIsCheckoutOpen(false)}
-                  className="px-4 py-2.5 text-xs font-medium text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded-xl transition-colors"
+                  className="px-4 py-2.5 text-xs font-medium text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Cancel
                 </button>
                 <button
                   type="button"
-                  onClick={handleFinalizeTransaction}
-                  className="px-6 py-2.5 bg-[#F37021] hover:bg-[#d95d14] text-white text-xs font-bold rounded-xl shadow-md transition-all flex items-center space-x-1.5"
+                  disabled={isSubmitting}
+                  onClick={() => handleFinalizeTransaction()}
+                  className="px-6 py-2.5 bg-[#F37021] hover:bg-[#d95d14] text-white text-xs font-bold rounded-xl shadow-md transition-all flex items-center space-x-1.5 disabled:opacity-60 disabled:cursor-not-allowed"
                 >
-                  <Check className="w-4 h-4" />
-                  <span>Generate BIR Official Receipt</span>
+                  {isSubmitting ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Recording Order Slip...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Check className="w-4 h-4" />
+                      <span>Record Sale & Generate Order Slip</span>
+                    </>
+                  )}
                 </button>
               </div>
 
@@ -1670,6 +1710,27 @@ export const BranchSalesPOS: React.FC = () => {
           ========================================================================= */}
       {showAuditDrawer && (
         <POSAuditDrawer onClose={() => setShowAuditDrawer(false)} />
+      )}
+
+      {/* =========================================================================
+          ATTACHED POS SAFEGUARD MODALS
+          ========================================================================= */}
+      {cashTenderSafeguard && (
+        <CashTenderSafeguardModal
+          details={cashTenderSafeguard}
+          themeMode={themeMode}
+          onClose={() => setCashTenderSafeguard(null)}
+          onConfirm={() => handleFinalizeTransaction(true)}
+        />
+      )}
+
+      {highDiscountSafeguard && (
+        <HighDiscountSafeguardModal
+          details={highDiscountSafeguard}
+          themeMode={themeMode}
+          onClose={() => setHighDiscountSafeguard(null)}
+          onConfirm={() => handleOpenCheckout(true)}
+        />
       )}
 
     </div>

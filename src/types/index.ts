@@ -368,7 +368,8 @@ export interface Sale {
 }
 
 // ----------------------------------------------------
-// BIR-Compliant Point of Sale (POS) Enterprise Models
+// Internal Counter Terminal & Branch Order Slip Models
+// (Real-Time Stock Deduction, Cashier Change Calculator, & Manual Booklet Reconciliation)
 // ----------------------------------------------------
 
 export type POSPaymentMethod =
@@ -490,6 +491,9 @@ export interface ShiftClosingRecord {
   todayAccumulatedSales: number;
   newAccumulatedGrandTotal: number;
   managerApprovedBy: string;
+  manualBookletSeries?: string; // e.g. Booklet #03 (OR #000120 - #000148)
+  manualBookletTotal?: number; // Physical booklet sum matched against VertexIS sales
+  manualBookletMatched?: boolean;
   notes?: string;
   syncedToCloud: boolean;
 }

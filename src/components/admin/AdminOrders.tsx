@@ -78,6 +78,15 @@ export const AdminOrders: React.FC = () => {
     setTimeout(() => setToastMessage(null), 4000);
   };
 
+  const readyForDispatchOrders = orders.filter(
+    (o) =>
+      (o.status === 'approved' || (o.productionStage as string) === 'ready_for_dispatch') &&
+      (o.productionStage === 'ready_for_dispatch' || (o.productionStage as string) === 'ready') &&
+      !o.isDispatched &&
+      o.status !== 'completed' &&
+      o.status !== 'rejected'
+  );
+
   const filteredOrders = orders
     .filter((o) => {
       let matchesStatus = true;
@@ -85,6 +94,13 @@ export const AdminOrders: React.FC = () => {
         matchesStatus = o.isArchived === true || o.status === 'completed';
       } else if (statusFilter === 'active') {
         matchesStatus = !o.isArchived && o.status !== 'completed';
+      } else if (statusFilter === 'ready_for_dispatch') {
+        matchesStatus =
+          (o.status === 'approved' || (o.productionStage as string) === 'ready_for_dispatch') &&
+          (o.productionStage === 'ready_for_dispatch' || (o.productionStage as string) === 'ready') &&
+          !o.isDispatched &&
+          o.status !== 'completed' &&
+          o.status !== 'rejected';
       } else if (statusFilter !== 'all') {
         matchesStatus = o.status === statusFilter;
       }
@@ -295,6 +311,11 @@ export const AdminOrders: React.FC = () => {
         <div className="flex items-center space-x-1.5 overflow-x-auto pb-1">
           {[
             { id: 'all', label: 'All Orders' },
+            {
+              id: 'ready_for_dispatch',
+              label: `Ready for Dispatch ${readyForDispatchOrders.length > 0 ? `(${readyForDispatchOrders.length})` : ''}`.trim(),
+              highlight: readyForDispatchOrders.length > 0,
+            },
             { id: 'waitingApproval', label: 'Payment Uploaded' },
             { id: 'pending', label: 'Pending' },
             { id: 'approved', label: 'Approved' },
@@ -304,9 +325,11 @@ export const AdminOrders: React.FC = () => {
             <button
               key={f.id}
               onClick={() => setStatusFilter(f.id)}
-              className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
                 statusFilter === f.id
                   ? 'bg-[#F37021] text-white shadow-xs'
+                  : f.highlight
+                  ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/25'
                   : isDark
                   ? 'bg-neutral-800 text-neutral-400 hover:bg-neutral-700'
                   : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
@@ -317,6 +340,48 @@ export const AdminOrders: React.FC = () => {
           ))}
         </div>
       </div>
+
+      {/* Ready for Delivery Dispatch Notification Banner for Orders & Approvals */}
+      {readyForDispatchOrders.length > 0 && (
+        <div
+          className={`p-4 sm:p-5 rounded-3xl border flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition-all animate-in fade-in duration-300 ${
+            isDark
+              ? 'bg-emerald-950/20 border-emerald-500/30 text-emerald-200'
+              : 'bg-emerald-50 border-emerald-200 text-emerald-900'
+          }`}
+        >
+          <div className="flex items-start sm:items-center space-x-3.5">
+            <div className="w-10 h-10 rounded-2xl bg-emerald-500 text-white flex items-center justify-center shrink-0 shadow-md">
+              <Truck className="w-5 h-5 animate-pulse" />
+            </div>
+            <div>
+              <div className="flex items-center space-x-2">
+                <span className="text-[11px] font-black uppercase tracking-wider text-emerald-600 dark:text-emerald-400">
+                  Commissary Dispatch Notice
+                </span>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-500 text-white shadow-xs">
+                  {readyForDispatchOrders.length} Ready for Delivery
+                </span>
+              </div>
+              <p className="text-sm font-bold mt-0.5">
+                {readyForDispatchOrders.length === 1
+                  ? `Order #${readyForDispatchOrders[0].id} (${readyForDispatchOrders[0].branchName}) has completed kitchen packaging and is ready for dispatch.`
+                  : `${readyForDispatchOrders.length} branch requisitions are finished & packed at the commissary and ready for courier / fleet delivery.`}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center space-x-2 shrink-0">
+            <button
+              onClick={() => setStatusFilter('ready_for_dispatch')}
+              className="px-4 py-2 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white transition-all shadow-sm cursor-pointer flex items-center space-x-1.5"
+            >
+              <span>View {readyForDispatchOrders.length} Ready Orders</span>
+              <ChevronRight className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Search & Sort Row */}
       <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
@@ -426,6 +491,12 @@ export const AdminOrders: React.FC = () => {
                         <span>Dispatched</span>
                       </span>
                     )}
+                    {(ord.productionStage === 'ready_for_dispatch' || (ord.productionStage as string) === 'ready') && !hasDelivery && !ord.isDispatched && ord.status === 'approved' && (
+                      <span className="inline-flex items-center space-x-1 font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-500/15 border border-emerald-500/30 px-2 py-0.5 rounded-lg animate-pulse">
+                        <Truck className="w-3 h-3" />
+                        <span>Ready for Delivery Dispatch</span>
+                      </span>
+                    )}
                   </div>
                 </div>
 
@@ -437,9 +508,28 @@ export const AdminOrders: React.FC = () => {
                     </p>
                   </div>
 
+                  {(ord.productionStage === 'ready_for_dispatch' || (ord.productionStage as string) === 'ready') && !hasDelivery && !ord.isDispatched && ord.status === 'approved' && (
+                    <button
+                      onClick={() => {
+                        setSelectedOrder(ord);
+                        const branch = branches.find((b) => b.id === ord.branchId);
+                        setReceiverName(branch?.managerName || `${ord.branchName} Store Manager`);
+                        setReceiverPhone(branch?.managerPhone || branch?.contactNumber || '+63 917 555 0192');
+                        setDeliveryAddress(branch?.address || branch?.location || `${ord.branchName} Station`);
+                        const totalPacks = ord.items.reduce((s, i) => s + i.quantity, 0);
+                        setPackageWeightKg(Math.max(1.5, Math.round(totalPacks * 0.12 * 10) / 10));
+                        setShowDeliveryModal(true);
+                      }}
+                      className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-all shadow-xs flex items-center space-x-1 cursor-pointer"
+                    >
+                      <Truck className="w-3.5 h-3.5" />
+                      <span>Dispatch</span>
+                    </button>
+                  )}
+
                   <button
                     onClick={() => setSelectedOrder(ord)}
-                    className="px-3.5 py-2 rounded-xl bg-neutral-100 dark:bg-neutral-800 hover:bg-[#80C7F2]/20 hover:text-[#1a7bb5] dark:hover:text-[#80C7F2] text-xs font-bold transition-colors flex items-center space-x-1"
+                    className="px-3.5 py-2 rounded-xl bg-neutral-100 dark:bg-neutral-800 hover:bg-[#80C7F2]/20 hover:text-[#1a7bb5] dark:hover:text-[#80C7F2] text-xs font-bold transition-colors flex items-center space-x-1 cursor-pointer"
                   >
                     <span>Inspect</span>
                     <ChevronRight className="w-3.5 h-3.5" />
@@ -495,6 +585,42 @@ export const AdminOrders: React.FC = () => {
 
             {/* Scrollable Content Body */}
             <div className="overflow-y-auto pr-1 py-4 space-y-5">
+              {/* Ready for Dispatch Status Banner */}
+              {(selectedOrder.productionStage === 'ready_for_dispatch' || (selectedOrder.productionStage as string) === 'ready') && (
+                <div className="p-3.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-center space-x-2.5">
+                    <div className="w-8 h-8 rounded-xl bg-emerald-500 text-white flex items-center justify-center shrink-0">
+                      <Truck className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <p className="font-extrabold text-emerald-600 dark:text-emerald-400">
+                        Commissary Kitchen Packaging Complete
+                      </p>
+                      <p className="text-[11px] text-neutral-600 dark:text-neutral-300">
+                        This order has finished kettle whipping, slab curing, and QC bagging at the Bicol kitchen. It is READY FOR DISPATCH.
+                      </p>
+                    </div>
+                  </div>
+                  {!selectedOrder.isDispatched && !deliveries.some((d) => d.orderId === selectedOrder.id) && (
+                    <button
+                      onClick={() => {
+                        const branch = branches.find((b) => b.id === selectedOrder.branchId);
+                        setReceiverName(branch?.managerName || `${selectedOrder.branchName} Store Manager`);
+                        setReceiverPhone(branch?.managerPhone || branch?.contactNumber || '+63 917 555 0192');
+                        setDeliveryAddress(branch?.address || branch?.location || `${selectedOrder.branchName} Station`);
+                        const totalPacks = selectedOrder.items.reduce((s, i) => s + i.quantity, 0);
+                        setPackageWeightKg(Math.max(1.5, Math.round(totalPacks * 0.12 * 10) / 10));
+                        setShowDeliveryModal(true);
+                      }}
+                      className="px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-all shadow-xs shrink-0 cursor-pointer flex items-center justify-center space-x-1"
+                    >
+                      <Truck className="w-3.5 h-3.5" />
+                      <span>Dispatch Delivery</span>
+                    </button>
+                  )}
+                </div>
+              )}
+
               {/* Items Table */}
               <div>
                 <div className="flex items-center justify-between mb-2">
@@ -553,6 +679,7 @@ export const AdminOrders: React.FC = () => {
                         src={selectedOrder.proofImagePath}
                         alt="Proof of Payment"
                         className="max-h-52 w-full object-contain"
+                        referrerPolicy="no-referrer"
                       />
                     </div>
                   </div>
