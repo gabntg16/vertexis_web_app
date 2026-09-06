@@ -22,6 +22,7 @@ import {
   Zap,
   Printer,
   ShieldCheck,
+  CreditCard,
 } from 'lucide-react';
 import {
   jtExpressService,
@@ -31,6 +32,7 @@ import {
 } from '../../services/jtExpress';
 import { JTShippingLabel } from '../common/JTShippingLabel';
 import { JTTrackingModal } from '../common/JTTrackingModal';
+import { AdminPaymentVerificationQueue } from './AdminPaymentVerificationQueue';
 
 export const AdminOrders: React.FC = () => {
   const {
@@ -45,6 +47,7 @@ export const AdminOrders: React.FC = () => {
     themeMode,
   } = useData();
 
+  const [activeMainSubTab, setActiveMainSubTab] = useState<'requisitions' | 'payments'>('requisitions');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'date_desc' | 'date_asc' | 'branch_asc' | 'amount_desc' | 'amount_asc' | 'status'>('date_desc');
@@ -298,48 +301,92 @@ export const AdminOrders: React.FC = () => {
         </div>
       )}
 
-      {/* Header Bar */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-black tracking-tight">Branch Stock Orders</h1>
-          <p className="text-xs text-neutral-500 font-medium">
-            Review stock requisitions, verify proof of payment, and dispatch deliveries.
-          </p>
-        </div>
+      {/* Main Sub-Tab Switcher */}
+      <div className="flex items-center space-x-2 border-b border-neutral-200 dark:border-neutral-800 pb-3">
+        <button
+          type="button"
+          onClick={() => setActiveMainSubTab('requisitions')}
+          className={`px-4 py-2 rounded-2xl text-xs font-bold transition-all flex items-center space-x-2 cursor-pointer ${
+            activeMainSubTab === 'requisitions'
+              ? 'bg-[#F37021] text-white shadow-xs'
+              : isDark
+              ? 'bg-neutral-900 text-neutral-400 hover:text-white'
+              : 'bg-neutral-100 text-neutral-600 hover:text-neutral-900'
+          }`}
+        >
+          <ShoppingBag className="w-4 h-4" />
+          <span>Requisitions & Dispatch Management</span>
+        </button>
 
-        {/* Filter Badges */}
-        <div className="flex items-center space-x-1.5 overflow-x-auto pb-1">
-          {[
-            { id: 'all', label: 'All Orders' },
-            {
-              id: 'ready_for_dispatch',
-              label: `Ready for Dispatch ${readyForDispatchOrders.length > 0 ? `(${readyForDispatchOrders.length})` : ''}`.trim(),
-              highlight: readyForDispatchOrders.length > 0,
-            },
-            { id: 'waitingApproval', label: 'Payment Uploaded' },
-            { id: 'pending', label: 'Pending' },
-            { id: 'approved', label: 'Approved' },
-            { id: 'archived', label: 'Archived / Fulfilled' },
-            { id: 'rejected', label: 'Rejected' },
-          ].map((f) => (
-            <button
-              key={f.id}
-              onClick={() => setStatusFilter(f.id)}
-              className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
-                statusFilter === f.id
-                  ? 'bg-[#F37021] text-white shadow-xs'
-                  : f.highlight
-                  ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/25'
-                  : isDark
-                  ? 'bg-neutral-800 text-neutral-400 hover:bg-neutral-700'
-                  : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
-              }`}
-            >
-              {f.label}
-            </button>
-          ))}
-        </div>
+        <button
+          type="button"
+          onClick={() => setActiveMainSubTab('payments')}
+          className={`px-4 py-2 rounded-2xl text-xs font-bold transition-all flex items-center space-x-2 cursor-pointer ${
+            activeMainSubTab === 'payments'
+              ? 'bg-[#F37021] text-white shadow-xs'
+              : isDark
+              ? 'bg-neutral-900 text-neutral-400 hover:text-white'
+              : 'bg-neutral-100 text-neutral-600 hover:text-neutral-900'
+          }`}
+        >
+          <CreditCard className="w-4 h-4" />
+          <span>Proof of Payment (PoP) Queue</span>
+          {orders.filter((o) => !!o.proofImagePath && o.status === 'waitingApproval').length > 0 && (
+            <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-white text-[#F37021]">
+              {orders.filter((o) => !!o.proofImagePath && o.status === 'waitingApproval').length}
+            </span>
+          )}
+        </button>
       </div>
+
+      {activeMainSubTab === 'payments' ? (
+        <div className="animate-in fade-in duration-200">
+          <AdminPaymentVerificationQueue />
+        </div>
+      ) : (
+        <>
+          {/* Header Bar */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              <h1 className="text-2xl font-black tracking-tight">Branch Stock Orders</h1>
+              <p className="text-xs text-neutral-500 font-medium">
+                Review stock requisitions, verify proof of payment, and dispatch deliveries.
+              </p>
+            </div>
+
+            {/* Filter Badges */}
+            <div className="flex items-center space-x-1.5 overflow-x-auto pb-1">
+              {[
+                { id: 'all', label: 'All Orders' },
+                {
+                  id: 'ready_for_dispatch',
+                  label: `Ready for Dispatch ${readyForDispatchOrders.length > 0 ? `(${readyForDispatchOrders.length})` : ''}`.trim(),
+                  highlight: readyForDispatchOrders.length > 0,
+                },
+                { id: 'waitingApproval', label: 'Payment Uploaded' },
+                { id: 'pending', label: 'Pending' },
+                { id: 'approved', label: 'Approved' },
+                { id: 'archived', label: 'Archived / Fulfilled' },
+                { id: 'rejected', label: 'Rejected' },
+              ].map((f) => (
+                <button
+                  key={f.id}
+                  onClick={() => setStatusFilter(f.id)}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
+                    statusFilter === f.id
+                      ? 'bg-[#F37021] text-white shadow-xs'
+                      : f.highlight
+                      ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/25'
+                      : isDark
+                      ? 'bg-neutral-800 text-neutral-400 hover:bg-neutral-700'
+                      : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
+                  }`}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+          </div>
 
       {/* Ready for Delivery Dispatch Notification Banner for Orders & Approvals */}
       {readyForDispatchOrders.length > 0 && (
@@ -1288,6 +1335,8 @@ export const AdminOrders: React.FC = () => {
           labelData={activeLabelData}
           onClose={() => setActiveLabelData(null)}
         />
+      )}
+        </>
       )}
     </div>
   );

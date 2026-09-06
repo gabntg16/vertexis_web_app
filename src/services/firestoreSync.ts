@@ -30,6 +30,8 @@ import {
   InventoryMovementRecord,
   POSAuditLog,
   ShiftClosingRecord,
+  SpoilageRecord,
+  PhysicalInventoryAudit,
 } from '../types';
 
 export type SyncStatus = 'connected' | 'syncing' | 'offline' | 'error';
@@ -111,6 +113,8 @@ export class FirestoreSyncService {
     onInventoryMovements?: (movements: InventoryMovementRecord[]) => void;
     onPosAuditLogs?: (logs: POSAuditLog[]) => void;
     onShiftClosings?: (closings: ShiftClosingRecord[]) => void;
+    onSpoilageRecords?: (records: SpoilageRecord[]) => void;
+    onPhysicalAudits?: (audits: PhysicalInventoryAudit[]) => void;
   }): () => void {
     this.cleanup();
     this.updateState({ status: 'syncing' });
@@ -376,6 +380,32 @@ export class FirestoreSyncService {
             if (data.length > 0) callbacks.onShiftClosings!(data);
           },
           (err) => console.warn('[Firestore] Shift Closings snapshot error:', err)
+        );
+        this.unsubscribers.push(unsub);
+      }
+
+      // 16. Spoilage Records
+      if (callbacks.onSpoilageRecords) {
+        const unsub = onSnapshot(
+          collection(db, 'spoilage_records'),
+          (snap) => {
+            const data: SpoilageRecord[] = snap.docs.map((d) => d.data() as SpoilageRecord);
+            if (data.length > 0) callbacks.onSpoilageRecords!(data);
+          },
+          (err) => console.warn('[Firestore] Spoilage Records snapshot error:', err)
+        );
+        this.unsubscribers.push(unsub);
+      }
+
+      // 17. Physical Audits
+      if (callbacks.onPhysicalAudits) {
+        const unsub = onSnapshot(
+          collection(db, 'physical_audits'),
+          (snap) => {
+            const data: PhysicalInventoryAudit[] = snap.docs.map((d) => d.data() as PhysicalInventoryAudit);
+            if (data.length > 0) callbacks.onPhysicalAudits!(data);
+          },
+          (err) => console.warn('[Firestore] Physical Audits snapshot error:', err)
         );
         this.unsubscribers.push(unsub);
       }

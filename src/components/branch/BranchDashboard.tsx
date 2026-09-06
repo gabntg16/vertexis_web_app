@@ -1,7 +1,6 @@
 import React from 'react';
 import { useData } from '../../context/DataContext';
 import {
-  DollarSign,
   Package,
   ShoppingBag,
   TrendingUp,
@@ -10,8 +9,11 @@ import {
   ArrowUpRight,
   Truck,
   Store,
-  Clock,
-  PlusCircle,
+  Boxes,
+  ClipboardCheck,
+  Trash2,
+  PackageCheck,
+  CheckCircle2,
 } from 'lucide-react';
 
 export const BranchDashboard: React.FC<{ onNavigateTab: (tab: string) => void }> = ({ onNavigateTab }) => {
@@ -21,10 +23,13 @@ export const BranchDashboard: React.FC<{ onNavigateTab: (tab: string) => void }>
     getOrdersForBranch,
     getSalesForBranch,
     getInventoryForBranch,
-    branchRevenue,
     branchStockCount,
     restockSuggestionsForBranch,
+    getDetailedDemandAnalyticsForBranch,
     demandForecastForBranch,
+    spoilageRecords,
+    getPhysicalAuditsForBranch,
+    deliveries,
     announcements,
     themeMode,
   } = useData();
@@ -32,16 +37,23 @@ export const BranchDashboard: React.FC<{ onNavigateTab: (tab: string) => void }>
   if (!currentBranch) return null;
 
   const branchId = currentBranch.id;
-  const revenue = branchRevenue(branchId);
   const totalStock = branchStockCount(branchId);
   const branchOrders = getOrdersForBranch(branchId);
-  const branchSales = getSalesForBranch(branchId);
+  const branchInventory = getInventoryForBranch(branchId);
   const restockSuggestions = restockSuggestionsForBranch(branchId);
-  const forecast = demandForecastForBranch(branchId);
+  const demandAnalytics = getDetailedDemandAnalyticsForBranch(branchId);
+  const branchSpoilage = spoilageRecords.filter((s) => s.branchId === branchId);
+  const branchAudits = getPhysicalAuditsForBranch ? getPhysicalAuditsForBranch(branchId) : [];
   const urgentSuggestions = restockSuggestions.filter((s) => s.urgency === 'Urgent');
 
-  const pendingOrders = branchOrders.filter((o) => o.status === 'pending' || o.status === 'waitingApproval');
+  const pendingOrders = branchOrders.filter(
+    (o) => o.status === 'pending' || o.status === 'waitingApproval' || o.status === 'approved' || o.status === 'dispatched'
+  );
   const isDark = themeMode === 'dark';
+
+  const totalWastageUnits = branchSpoilage.reduce((sum, s) => sum + s.quantity, 0);
+  const totalWastageCost = branchSpoilage.reduce((sum, s) => sum + s.costImpact, 0);
+  const totalSuggestedRestockUnits = demandAnalytics.reduce((sum, a) => sum + a.suggestedOrderQuantity, 0);
 
   return (
     <div className="space-y-6">
@@ -61,24 +73,31 @@ export const BranchDashboard: React.FC<{ onNavigateTab: (tab: string) => void }>
               {currentBranch.name}
             </h1>
             <p className="text-sm text-neutral-600 dark:text-neutral-300 mt-1 max-w-xl font-medium">
-              Daily branch operations, counter terminal order entry, live inventory synchronization, commissary restock orders, and inbound shipments.
+              B2B branch operations, live shelf inventory synchronization, inter-branch commissary requisitions, physical audits, and predictive demand analytics.
             </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
             <button
-              onClick={() => onNavigateTab('sales_pos')}
-              className="px-4 py-2.5 rounded-xl bg-emerald-600 text-white text-xs sm:text-sm font-bold shadow-md hover:bg-emerald-700 transition-all flex items-center space-x-1.5"
-            >
-              <DollarSign className="w-4 h-4" />
-              <span>Counter Terminal Entry</span>
-            </button>
-            <button
               onClick={() => onNavigateTab('orders')}
-              className="px-4 py-2.5 rounded-xl bg-[#F37021] text-white text-xs sm:text-sm font-bold shadow-md hover:bg-[#d85e15] transition-all flex items-center space-x-1.5"
+              className="px-4 py-2.5 rounded-xl bg-[#F37021] text-white text-xs sm:text-sm font-bold shadow-md hover:bg-[#d85e15] transition-all flex items-center space-x-1.5 cursor-pointer"
             >
               <ShoppingBag className="w-4 h-4" />
               <span>Order Commissary Stock</span>
+            </button>
+            <button
+              onClick={() => onNavigateTab('inventory')}
+              className="px-4 py-2.5 rounded-xl bg-[#80C7F2]/20 text-[#1a7bb5] dark:text-[#80C7F2] hover:bg-[#80C7F2]/30 border border-[#80C7F2]/40 text-xs sm:text-sm font-bold transition-all flex items-center space-x-1.5 cursor-pointer"
+            >
+              <ClipboardCheck className="w-4 h-4" />
+              <span>Physical Shelf Audit</span>
+            </button>
+            <button
+              onClick={() => onNavigateTab('wastage')}
+              className="px-4 py-2.5 rounded-xl bg-red-500/10 text-red-600 dark:text-red-400 hover:bg-red-500/20 border border-red-500/20 text-xs sm:text-sm font-bold transition-all flex items-center space-x-1.5 cursor-pointer"
+            >
+              <Trash2 className="w-4 h-4" />
+              <span>Log Spoilage</span>
             </button>
           </div>
         </div>
@@ -93,16 +112,16 @@ export const BranchDashboard: React.FC<{ onNavigateTab: (tab: string) => void }>
             </div>
             <div>
               <p className="text-xs sm:text-sm font-black">
-                Restock Alert: {urgentSuggestions.length} gourmet marshmallow flavor(s) running critically low
+                Predictive Restock Alert: {urgentSuggestions.length} gourmet marshmallow flavor(s) running critically low
               </p>
               <p className="text-xs text-red-600/80 dark:text-red-400 mt-0.5">
-                {urgentSuggestions.map((s) => `${s.productName} (${s.currentStock} left)`).join(', ')}
+                {urgentSuggestions.map((s) => `${s.productName} (${s.currentStock} left, auto-suggest: +${s.suggestedOrderQuantity} units)`).join(' • ')}
               </p>
             </div>
           </div>
           <button
             onClick={() => onNavigateTab('orders')}
-            className="px-4 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs font-bold whitespace-nowrap self-start sm:self-auto shadow-xs"
+            className="px-4 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs font-bold whitespace-nowrap self-start sm:self-auto shadow-xs cursor-pointer"
           >
             Reorder Now
           </button>
@@ -111,38 +130,16 @@ export const BranchDashboard: React.FC<{ onNavigateTab: (tab: string) => void }>
 
       {/* KPI Cards Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* Branch Revenue */}
-        <div className={`p-5 rounded-2xl border ${
-          isDark ? 'bg-[#161616] border-neutral-800' : 'bg-white border-[#80C7F2]/20 shadow-xs'
-        }`}>
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold uppercase tracking-wider text-neutral-500">
-              Branch Sales Revenue
-            </span>
-            <div className="p-2 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
-              <DollarSign className="w-4 h-4" />
-            </div>
-          </div>
-          <div className="mt-3">
-            <div className="text-2xl sm:text-3xl font-black text-emerald-600 dark:text-emerald-400">
-              ₱{revenue.toLocaleString()}
-            </div>
-            <p className="text-xs text-neutral-500 mt-1">
-              {branchSales.length} total sales transactions
-            </p>
-          </div>
-        </div>
-
         {/* Total Stock Units */}
         <div className={`p-5 rounded-2xl border ${
           isDark ? 'bg-[#161616] border-neutral-800' : 'bg-white border-[#80C7F2]/20 shadow-xs'
         }`}>
           <div className="flex items-center justify-between">
             <span className="text-xs font-bold uppercase tracking-wider text-neutral-500">
-              Available Store Stock
+              On-Hand Shelf Stock
             </span>
             <div className="p-2 rounded-xl bg-[#80C7F2]/15 text-[#1a7bb5] dark:text-[#80C7F2]">
-              <Package className="w-4 h-4" />
+              <Boxes className="w-4 h-4" />
             </div>
           </div>
           <div className="mt-3">
@@ -155,35 +152,35 @@ export const BranchDashboard: React.FC<{ onNavigateTab: (tab: string) => void }>
           </div>
         </div>
 
-        {/* Demand Velocity */}
+        {/* Demand Velocity (Exponential Smoothing α=0.3) */}
         <div className={`p-5 rounded-2xl border ${
           isDark ? 'bg-[#161616] border-neutral-800' : 'bg-white border-[#80C7F2]/20 shadow-xs'
         }`}>
           <div className="flex items-center justify-between">
             <span className="text-xs font-bold uppercase tracking-wider text-neutral-500">
-              Demand Forecast
+              Demand Forecast (α=0.3)
             </span>
             <div className="p-2 rounded-xl bg-[#F37021]/15 text-[#F37021]">
-              <TrendingUp className="w-4 h-4" />
+              <Sparkles className="w-4 h-4" />
             </div>
           </div>
           <div className="mt-3">
-            <div className="text-sm font-black text-neutral-900 dark:text-white truncate">
-              {forecast}
+            <div className="text-2xl sm:text-3xl font-black text-[#F37021]">
+              +{totalSuggestedRestockUnits} units
             </div>
             <p className="text-xs text-neutral-500 mt-1">
-              14-day rolling demand calculation
+              Suggested 7-day replenishment
             </p>
           </div>
         </div>
 
-        {/* Pending Requisitions */}
+        {/* Pending Requisitions Pipeline */}
         <div className={`p-5 rounded-2xl border ${
           isDark ? 'bg-[#161616] border-neutral-800' : 'bg-white border-[#80C7F2]/20 shadow-xs'
         }`}>
           <div className="flex items-center justify-between">
             <span className="text-xs font-bold uppercase tracking-wider text-neutral-500">
-              Active Stock Orders
+              Active Requisitions
             </span>
             <div className="p-2 rounded-xl bg-amber-500/10 text-amber-600">
               <ShoppingBag className="w-4 h-4" />
@@ -194,7 +191,29 @@ export const BranchDashboard: React.FC<{ onNavigateTab: (tab: string) => void }>
               {pendingOrders.length}
             </div>
             <p className="text-xs text-neutral-500 mt-1">
-              Requisitions in pipeline
+              Orders in commissary pipeline
+            </p>
+          </div>
+        </div>
+
+        {/* Wastage Loss Isolated */}
+        <div className={`p-5 rounded-2xl border ${
+          isDark ? 'bg-[#161616] border-neutral-800' : 'bg-white border-[#80C7F2]/20 shadow-xs'
+        }`}>
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold uppercase tracking-wider text-neutral-500">
+              Wastage (Isolated)
+            </span>
+            <div className="p-2 rounded-xl bg-red-500/10 text-red-600">
+              <Trash2 className="w-4 h-4" />
+            </div>
+          </div>
+          <div className="mt-3">
+            <div className="text-2xl sm:text-3xl font-black text-red-600 dark:text-red-400">
+              {totalWastageUnits} units
+            </div>
+            <p className="text-xs text-neutral-500 mt-1">
+              ₱{totalWastageCost.toLocaleString()} loss (excluded from SES)
             </p>
           </div>
         </div>

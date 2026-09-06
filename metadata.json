@@ -1,6 +1,6 @@
 {
   "name": "VertexIS - Marsh Bites Branch System",
-  "description": "Enterprise multi-branch franchise management system for The Marsh Bites featuring branch applications, compliance document verification, automated role-based account provisioning, lifecycle status controls, and audit trails.",
+  "description": "VertexIS: An Ordering and Inventory System with Predictive Demand Analytics for Marsh Bites, Legazpi City — featuring inter-branch requisitions with Naga Central Commissary, physical shelf inventory audits, spoilage isolation, and Single Exponential Smoothing demand forecasting.",
   "requestFramePermissions": [],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"

@@ -1,14 +1,37 @@
 // Data Models for VertexIS - Marsh Bites Branch Management System
 
-export type UserRole = 'admin' | 'branch';
+// 3-Tier Role-Based Access Control (RBAC) Architecture
+export enum Role {
+  SUPER_ADMIN = 'SUPER_ADMIN',
+  BRANCH_MANAGER = 'BRANCH_MANAGER',
+  BRANCH_STAFF = 'BRANCH_STAFF',
+}
+
+export enum UserRole {
+  SUPER_ADMIN = 'SUPER_ADMIN',
+  BRANCH_MANAGER = 'BRANCH_MANAGER',
+  BRANCH_STAFF = 'BRANCH_STAFF',
+}
+
+export type RoleType = 'SUPER_ADMIN' | 'BRANCH_MANAGER' | 'BRANCH_STAFF';
+
+// Daily Shift Log Status Lifecycle: DRAFT -> PENDING_VALIDATION -> VALIDATED_AND_LOCKED
+export enum DailyLogStatus {
+  DRAFT = 'DRAFT',
+  PENDING_VALIDATION = 'PENDING_VALIDATION',
+  VALIDATED_AND_LOCKED = 'VALIDATED_AND_LOCKED',
+}
+
+export type DailyLogStatusType = 'DRAFT' | 'PENDING_VALIDATION' | 'VALIDATED_AND_LOCKED';
 
 export interface UserModel {
   id: string;
   name: string;
   email: string;
   password: string;
-  role: UserRole;
+  role: Role | UserRole | RoleType | 'admin' | 'branch' | string;
   branchId?: string;
+  branchName?: string;
 }
 
 export type BranchStatus = 'Active' | 'Pending Activation' | 'Suspended' | 'Inactive' | 'Closed';
@@ -192,6 +215,74 @@ export interface Order {
   paymentIntentId?: string;
   paymentReference?: string;
   paymentCompletedAt?: string;
+  paymentRemarks?: string;
+  paymentVerifiedBy?: string;
+  paymentVerifiedAt?: string;
+  paymentRejectionReason?: string;
+}
+
+export type SpoilageReason =
+  | 'Expired'
+  | 'Transport Damage'
+  | 'Production Defect'
+  | 'Mishandling / Melted'
+  | 'Customer Spoilage / Sample';
+
+export interface SpoilageRecord {
+  id: string;
+  branchId: string;
+  branchName: string;
+  productId: string;
+  productName: string;
+  flavor: string;
+  quantity: number;
+  reason: SpoilageReason;
+  batchCode?: string;
+  reportedBy: string;
+  timestamp: string;
+  costImpact: number; // Wholesale valuation in PHP
+  notes?: string;
+  excludedFromDemandForecast: boolean; // Flag verifying isolation from analytics pipeline
+}
+
+export type DiscrepancyCategory =
+  | 'Tally Error'
+  | 'Unrecorded Sample / Spoilage'
+  | 'Suspected Theft / Loss'
+  | 'Damaged Found Unlogged'
+  | 'Normal Variance';
+
+export interface PhysicalAuditItem {
+  productId: string;
+  productName: string;
+  flavor: string;
+  systemBookStock: number;
+  physicalCount: number;
+  discrepancy: number; // physicalCount - systemBookStock
+  discrepancyType: 'Matched' | 'Shortage' | 'Overage';
+  unitPrice: number;
+  wholesaleCost: number;
+  discrepancyValue: number; // discrepancy * wholesaleCost
+  notes?: string;
+}
+
+export interface PhysicalInventoryAudit {
+  id: string;
+  branchId: string;
+  branchName: string;
+  auditedBy: string;
+  auditorRole: string;
+  timestamp: string;
+  items: PhysicalAuditItem[];
+  totalSystemStock: number;
+  totalPhysicalCount: number;
+  totalDiscrepancyUnits: number;
+  totalShrinkageValue: number; // in PHP
+  status: 'Draft' | 'Submitted' | 'Reconciled';
+  discrepancyReasonCategory?: DiscrepancyCategory;
+  notes?: string;
+  reconciledAt?: string;
+  reconciledBy?: string;
 }
 
 export type BatchStage = 'in_kettle' | 'curing' | 'packaged' | 'completed';
@@ -548,11 +639,44 @@ export interface POSAuditLog {
   ipAddress?: string;
 }
 
+export type NotificationKind =
+  | 'order'
+  | 'production'
+  | 'logistics'
+  | 'inventory'
+  | 'pos'
+  | 'general';
+
+export type NotificationPriority = 'normal' | 'info' | 'warning' | 'urgent' | 'success';
+
+export type NotificationAudience =
+  | 'all'
+  | 'admin'
+  | 'branch_manager'
+  | 'cashier'
+  | 'commissary_staff';
+
 export interface Announcement {
   id: string;
   title: string;
   message: string;
   createdAt: string;
+
+  // 1. WHAT KIND
+  kind?: NotificationKind;
+  priority?: NotificationPriority;
+
+  // 2. WHERE (Scope & Location)
+  scope?: 'nationwide' | 'branch' | 'commissary';
+  targetBranchId?: string; // 'ALL' or specific branch ID
+  targetBranchName?: string; // Display branch name (e.g. "Legazpi City Branch", "Naga Commissary Hub")
+
+  // 3. WHO CAN SEE (Target Audience & RBAC)
+  targetAudience?: NotificationAudience[];
+  authorName?: string;
+  authorRole?: string;
+  actionUrl?: string; // Tab navigation key e.g. 'orders', 'logistics', 'inventory'
+  readBy?: string[]; // Array of user IDs who acknowledged this notification
 }
 
 export type CalendarEventType = 'task' | 'appointment';
@@ -566,3 +690,171 @@ export interface CalendarEvent {
   branchId?: string;
   branchName?: string;
 }
+
+// ----------------------------------------------------
+// B2B Inter-Branch Requisitions, Spoilage & Physical Audit Types
+// ----------------------------------------------------
+
+export type SpoilageReason =
+  | 'Expired Shelf Life'
+  | 'Melted / Heat Damaged'
+  | 'Packaging Seal Compromised'
+  | 'Dropped / Crushed in Handling'
+  | 'Quality Defect'
+  | 'Transit / Delivery Damage';
+
+export interface SpoilageRecord {
+  id: string;
+  branchId: string;
+  branchName: string;
+  productId: string;
+  productName: string;
+  flavor: string;
+  quantity: number;
+  reason: SpoilageReason;
+  batchCode?: string;
+  reportedBy: string;
+  timestamp: string;
+  costImpact: number;
+  notes?: string;
+  excludedFromDemandForecast: boolean;
+}
+
+export type DiscrepancyCategory =
+  | 'Damaged Found Unlogged'
+  | 'Shortage / Suspected Shrinkage'
+  | 'Unrecorded Free Samples / Promo'
+  | 'Cashier Punch Mismatch'
+  | 'Transit Loss'
+  | 'Normal Variance';
+
+export interface PhysicalAuditItem {
+  productId: string;
+  productName: string;
+  flavor: string;
+  systemBookStock: number;
+  physicalCount: number;
+  discrepancy: number; // physicalCount - systemBookStock
+  discrepancyType: 'Matched' | 'Shortage' | 'Overage';
+  unitPrice: number;
+  wholesaleCost: number;
+  discrepancyValue: number; // discrepancy * wholesaleCost (negative if shortage)
+  notes?: string;
+}
+
+export interface PhysicalInventoryAudit {
+  id: string;
+  branchId: string;
+  branchName: string;
+  auditedBy: string;
+  auditorRole: string;
+  timestamp: string;
+  items: PhysicalAuditItem[];
+  totalSystemStock: number;
+  totalPhysicalCount: number;
+  totalDiscrepancyUnits: number;
+  totalShrinkageValue: number;
+  status: 'Submitted' | 'Reconciled';
+  discrepancyReasonCategory: DiscrepancyCategory;
+  notes?: string;
+  reconciledAt?: string;
+  reconciledBy?: string;
+}
+
+export interface ProductDemandAnalytics {
+  productId: string;
+  productName: string;
+  flavor: string;
+  unitPrice: number;
+  wholesalePrice: number;
+  currentStock: number;
+  inTransitStock: number;
+  dailyHistoricalSales: number[];
+  alpha: number; // 0.3
+  smoothedDailyDemand: number;
+  baselineDemand: number;
+  expectedWeeklyDemand: number;
+  recommendedSafetyStock: number;
+  leadTimeDays: number;
+  suggestedOrderQuantity: number;
+  urgency: 'Urgent' | 'Review' | 'Monitor';
+  daysOfInventoryLeft: number;
+  velocityTrend: 'Rising' | 'Steady' | 'Declining';
+}
+
+// ----------------------------------------------------
+// Frontline Daily Operations Models (Strict Manual Workflow)
+// (Physical Counts, Manual Sales, Spoilage/Wastage, Inbound Receiving)
+// ----------------------------------------------------
+
+export interface DailyPhysicalCountItem {
+  productId: string;
+  productName: string;
+  flavor: string;
+  category: 'marshmallows' | 'flavorings' | 'packaging';
+  beginningCount: number;
+  endingCount: number;
+  unit: string;
+  variance?: number;
+  notes?: string;
+}
+
+export interface DailyManualSalesItem {
+  productId: string;
+  productName: string;
+  flavor: string;
+  unitsSold: number;
+  unitPrice: number;
+  totalSales: number;
+}
+
+export interface DailySpoilageItem {
+  id: string;
+  productId: string;
+  productName: string;
+  flavor: string;
+  quantity: number;
+  reason: SpoilageReason;
+  notes?: string;
+  costImpact: number;
+}
+
+export interface DailyInboundReceivingItem {
+  id: string;
+  deliveryId?: string;
+  manifestNumber: string;
+  supplierOrSource: string;
+  productId: string;
+  productName: string;
+  expectedUnits: number;
+  receivedUnits: number;
+  condition: 'good' | 'damaged' | 'shortage' | 'overage';
+  verifiedAt: string;
+  notes?: string;
+}
+
+export interface DailyShiftLog {
+  id: string;
+  date: string; // YYYY-MM-DD
+  branchId: string;
+  branchName: string;
+  status: DailyLogStatus | DailyLogStatusType;
+  physicalCounts: DailyPhysicalCountItem[];
+  manualSales: DailyManualSalesItem[];
+  spoilageEntries: DailySpoilageItem[];
+  inboundReceiving: DailyInboundReceivingItem[];
+  submittedBy?: string;
+  submittedById?: string;
+  submittedAt?: string;
+  validatedBy?: string;
+  validatedById?: string;
+  validatedAt?: string;
+  lockedAt?: string;
+  managerNotes?: string;
+  totalSalesUnits: number;
+  totalSalesRevenue: number;
+  totalSpoilageUnits: number;
+  totalSpoilageCost: number;
+}
+
+

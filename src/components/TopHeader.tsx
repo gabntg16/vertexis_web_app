@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useData } from '../context/DataContext';
 import {
   Menu,
@@ -9,9 +9,7 @@ import {
   ChevronDown,
   Sun,
   Moon,
-  LogOut,
   RotateCcw,
-  FlaskConical,
   CloudCheck,
   CloudOff,
   RefreshCw,
@@ -27,15 +25,25 @@ import {
   Boxes,
   Receipt,
   PackageCheck,
+  Trash2,
+  ClipboardCheck,
   Bell,
   Sparkles,
+  CheckCheck,
+  ExternalLink,
+  Globe,
+  Users,
 } from 'lucide-react';
+import { filterNotificationsForUser } from '../utils/notificationUtils';
+import { NotificationBadgeGroup } from './common/NotificationBadgeGroup';
+import { NotificationKind } from '../types';
 
 interface TopHeaderProps {
   activeTab: string;
   onToggleMobileMenu: () => void;
   onOpenResetModal: () => void;
-  onOpenTesterModal: () => void;
+  onOpenTesterModal?: () => void;
+  onNavigateTab?: (tab: string) => void;
 }
 
 export const TopHeader: React.FC<TopHeaderProps> = ({
@@ -43,6 +51,7 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
   onToggleMobileMenu,
   onOpenResetModal,
   onOpenTesterModal,
+  onNavigateTab,
 }) => {
   const {
     currentUser,
@@ -51,6 +60,8 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
     themeMode,
     syncState,
     announcements,
+    markAnnouncementAsRead,
+    markAllAnnouncementsAsRead,
     toggleTheme,
     switchUser,
     logout,
@@ -60,11 +71,28 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showNotificationMenu, setShowNotificationMenu] = useState(false);
   const [isManualSyncing, setIsManualSyncing] = useState(false);
+  const [activeCategoryFilter, setActiveCategoryFilter] = useState<'all' | NotificationKind>('all');
 
   if (!currentUser) return null;
 
   const isAdmin = currentUser.role === 'admin';
   const isDark = themeMode === 'dark';
+
+  // Filter notifications specifically targeted to this user (WHO) and branch (WHERE)
+  const userNotifications = useMemo(() => {
+    return filterNotificationsForUser(announcements, currentUser, currentBranch);
+  }, [announcements, currentUser, currentBranch]);
+
+  // Count unread notifications
+  const unreadCount = useMemo(() => {
+    return userNotifications.filter((a) => !a.readBy?.includes(currentUser.id)).length;
+  }, [userNotifications, currentUser.id]);
+
+  // Apply popover category filter
+  const displayedNotifications = useMemo(() => {
+    if (activeCategoryFilter === 'all') return userNotifications;
+    return userNotifications.filter((a) => a.kind === activeCategoryFilter);
+  }, [userNotifications, activeCategoryFilter]);
 
   const handleManualSync = async () => {
     try {
@@ -78,13 +106,22 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
   // Tab metadata titles and icons
   const tabTitles: Record<string, { title: string; subtitle: string; icon: any }> = {
     dashboard: {
-      title: 'Executive Overview',
-      subtitle: isAdmin ? 'Central Commissary KPI Dashboard' : `${currentBranch?.name || 'Branch'} Daily Operations`,
+      title: isAdmin ? 'Central Executive Overview' : 'Branch Overview',
+      subtitle: isAdmin
+        ? 'Central Commissary KPI Dashboard • Naga City, Bicol'
+        : `${currentBranch?.name || 'Branch'} • Inter-Branch B2B Operations (Naga Commissary ↔ Legazpi)`,
       icon: LayoutDashboard,
     },
     orders: {
-      title: isAdmin ? 'Orders & Commissary Approvals' : 'Stock Requisition Orders',
-      subtitle: isAdmin ? 'Review & dispatch branch batch orders' : 'Request fresh marshmallow batches from Bicol',
+      title: isAdmin ? 'Orders & Commissary Approvals' : 'Stock Requisitions & Reorders',
+      subtitle: isAdmin
+        ? 'Review & dispatch branch batch orders'
+        : 'Inter-branch ordering from Naga Central Commissary with auto-fill (α=0.3)',
+      icon: ShoppingBag,
+    },
+    reorder: {
+      title: 'Stock Requisitions & Reorders',
+      subtitle: 'Inter-branch ordering from Naga Central Commissary with auto-fill (α=0.3)',
       icon: ShoppingBag,
     },
     production: {
@@ -98,28 +135,40 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
       icon: Building2,
     },
     logistics: {
-      title: isAdmin ? 'Fleet & Dispatch Logistics' : 'Inbound Shipments & Receiving',
-      subtitle: isAdmin ? 'LBC & cold-chain distribution tracking' : 'Verify physical counts against commissary manifests',
+      title: isAdmin ? 'Fleet & Dispatch Logistics' : 'Inbound Deliveries & Receiving',
+      subtitle: isAdmin
+        ? 'LBC & cold-chain distribution tracking'
+        : 'Confirm received stock dispatched from central commissary',
       icon: isAdmin ? Truck : PackageCheck,
     },
+    deliveries: {
+      title: 'Inbound Deliveries & Receiving',
+      subtitle: 'Confirm received stock dispatched from central commissary',
+      icon: PackageCheck,
+    },
     sales: {
-      title: 'Sales & BIR Financial Analytics',
-      subtitle: 'Official receipts, 12% VAT calculations & Z-Readings',
+      title: 'B2B Sales & Branch Movement Analytics',
+      subtitle: 'Historical branch consumption & dispatch tracking',
       icon: TrendingUp,
     },
-    sales_pos: {
-      title: 'POS Register & Fast Checkout',
-      subtitle: 'BIR-compliant receipt generation & multi-tender payment',
-      icon: CreditCard,
-    },
     inventory: {
-      title: 'Branch Stock Ledger & Waste Control',
-      subtitle: 'Track physical inventory, restocks & quality adjustments',
+      title: 'Inventory & Physical Audits',
+      subtitle: 'System book stock vs. actual physical shelf count reconciliation & demand analytics',
       icon: Boxes,
     },
+    wastage: {
+      title: 'Spoilage & Wastage Log',
+      subtitle: 'Track expired, damaged & heat-melted inventory (isolated from demand forecast)',
+      icon: Trash2,
+    },
+    physical_audit: {
+      title: 'Physical Shelf Count Audit',
+      subtitle: 'Audit shelf counts and reconcile inventory shrinkages with permanent ledgers',
+      icon: ClipboardCheck,
+    },
     history: {
-      title: 'Sales History & Transaction Audit',
-      subtitle: 'View completed receipts, voids, and refunds',
+      title: 'Requisition Slips & Transaction Audit',
+      subtitle: 'View historical order slips, status changes, and dispatch logs',
       icon: Receipt,
     },
     calendar: {
@@ -291,69 +340,193 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
                 title="System Notifications & Workflow Alerts"
               >
                 <Bell className="w-3.5 h-3.5" />
-                {announcements.length > 0 && (
-                  <span className="absolute -top-1 -right-1 flex h-4 min-w-[16px] px-1 items-center justify-center rounded-full bg-[#F37021] text-[9px] font-black text-white shadow-xs">
-                    {announcements.length > 9 ? '9+' : announcements.length}
+                {unreadCount > 0 ? (
+                  <span className="absolute -top-1 -right-1 flex h-4 min-w-[16px] px-1 items-center justify-center rounded-full bg-[#F37021] text-[9px] font-black text-white shadow-xs animate-pulse">
+                    {unreadCount > 9 ? '9+' : unreadCount}
                   </span>
-                )}
+                ) : userNotifications.length > 0 ? (
+                  <span className="absolute -top-1 -right-1 flex h-3.5 min-w-[14px] px-1 items-center justify-center rounded-full bg-neutral-400 text-[8px] font-bold text-white">
+                    {userNotifications.length > 9 ? '9+' : userNotifications.length}
+                  </span>
+                ) : null}
               </button>
 
               {showNotificationMenu && (
                 <>
                   <div className="fixed inset-0 z-40" onClick={() => setShowNotificationMenu(false)} />
-                  <div className="absolute right-0 mt-2 w-80 sm:w-96 max-h-96 overflow-y-auto rounded-2xl shadow-2xl border z-50 p-3 text-xs bg-white dark:bg-[#1c1c1c] border-neutral-200 dark:border-neutral-700 text-neutral-900 dark:text-white">
-                    <div className="flex items-center justify-between pb-2 mb-2 border-b border-neutral-200 dark:border-neutral-800">
-                      <div className="flex items-center space-x-1.5 font-bold text-xs">
-                        <Bell className="w-3.5 h-3.5 text-[#F37021]" />
-                        <span>Live Broadcasts & Workflow Handoffs</span>
+                  <div className="absolute right-0 mt-2 w-80 sm:w-[420px] max-h-[500px] flex flex-col rounded-2xl shadow-2xl border z-50 bg-white dark:bg-[#1c1c1c] border-neutral-200 dark:border-neutral-700 text-neutral-900 dark:text-white overflow-hidden">
+                    {/* Popover Header */}
+                    <div className="p-3 border-b border-neutral-200 dark:border-neutral-800 bg-neutral-50/70 dark:bg-neutral-900/50">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center space-x-2">
+                          <span className="p-1 rounded-lg bg-[#F37021]/15 text-[#F37021]">
+                            <Bell className="w-3.5 h-3.5" />
+                          </span>
+                          <div>
+                            <h3 className="font-bold text-xs leading-none">Notifications & Alerts</h3>
+                            <p className="text-[10px] text-neutral-400 mt-0.5">
+                              {isAdmin
+                                ? 'Targeted HQ & 19-Branch Overseer Scope'
+                                : `Targeted to: ${currentBranch?.name || 'Branch'}`}
+                            </p>
+                          </div>
+                        </div>
+
+                        {unreadCount > 0 && (
+                          <button
+                            onClick={() => markAllAnnouncementsAsRead()}
+                            className="text-[10.5px] font-bold text-[#1a7bb5] dark:text-[#80C7F2] hover:underline flex items-center space-x-1 cursor-pointer"
+                            title="Mark all notifications as read"
+                          >
+                            <CheckCheck className="w-3 h-3" />
+                            <span>Mark all read</span>
+                          </button>
+                        )}
                       </div>
-                      <span className="text-[10px] font-semibold text-neutral-400">
-                        {announcements.length} alerts
-                      </span>
+
+                      {/* Quick Category Filter Pills */}
+                      <div className="flex items-center space-x-1.5 mt-2.5 overflow-x-auto pb-1 text-[10.5px] scrollbar-none">
+                        <button
+                          onClick={() => setActiveCategoryFilter('all')}
+                          className={`px-2 py-0.5 rounded-lg font-bold shrink-0 transition-colors ${
+                            activeCategoryFilter === 'all'
+                              ? 'bg-[#80C7F2] text-neutral-900 shadow-xs'
+                              : 'bg-neutral-200 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400 hover:bg-neutral-300 dark:hover:bg-neutral-700'
+                          }`}
+                        >
+                          All ({userNotifications.length})
+                        </button>
+                        <button
+                          onClick={() => setActiveCategoryFilter('order')}
+                          className={`px-2 py-0.5 rounded-lg font-medium shrink-0 transition-colors ${
+                            activeCategoryFilter === 'order'
+                              ? 'bg-blue-600 text-white shadow-xs'
+                              : 'bg-neutral-200 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400 hover:bg-neutral-300 dark:hover:bg-neutral-700'
+                          }`}
+                        >
+                          📦 Orders
+                        </button>
+                        <button
+                          onClick={() => setActiveCategoryFilter('logistics')}
+                          className={`px-2 py-0.5 rounded-lg font-medium shrink-0 transition-colors ${
+                            activeCategoryFilter === 'logistics'
+                              ? 'bg-sky-600 text-white shadow-xs'
+                              : 'bg-neutral-200 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400 hover:bg-neutral-300 dark:hover:bg-neutral-700'
+                          }`}
+                        >
+                          🚚 Logistics
+                        </button>
+                        <button
+                          onClick={() => setActiveCategoryFilter('production')}
+                          className={`px-2 py-0.5 rounded-lg font-medium shrink-0 transition-colors ${
+                            activeCategoryFilter === 'production'
+                              ? 'bg-amber-600 text-white shadow-xs'
+                              : 'bg-neutral-200 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400 hover:bg-neutral-300 dark:hover:bg-neutral-700'
+                          }`}
+                        >
+                          🏭 Kitchen
+                        </button>
+                        <button
+                          onClick={() => setActiveCategoryFilter('inventory')}
+                          className={`px-2 py-0.5 rounded-lg font-medium shrink-0 transition-colors ${
+                            activeCategoryFilter === 'inventory'
+                              ? 'bg-rose-600 text-white shadow-xs'
+                              : 'bg-neutral-200 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400 hover:bg-neutral-300 dark:hover:bg-neutral-700'
+                          }`}
+                        >
+                          ⚠️ Stock
+                        </button>
+                        <button
+                          onClick={() => setActiveCategoryFilter('general')}
+                          className={`px-2 py-0.5 rounded-lg font-medium shrink-0 transition-colors ${
+                            activeCategoryFilter === 'general'
+                              ? 'bg-neutral-700 text-white shadow-xs'
+                              : 'bg-neutral-200 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400 hover:bg-neutral-300 dark:hover:bg-neutral-700'
+                          }`}
+                        >
+                          📢 Directives
+                        </button>
+                      </div>
                     </div>
 
-                    <div className="space-y-2 max-h-80 overflow-y-auto">
-                      {announcements.length === 0 ? (
-                        <div className="py-6 text-center text-neutral-400">
-                          <Bell className="w-6 h-6 mx-auto mb-1.5 opacity-40" />
-                          <p className="text-xs">No active alerts</p>
+                    {/* Notification Items List */}
+                    <div className="space-y-2 p-3 max-h-80 overflow-y-auto">
+                      {displayedNotifications.length === 0 ? (
+                        <div className="py-8 text-center text-neutral-400">
+                          <Bell className="w-6 h-6 mx-auto mb-1.5 opacity-30" />
+                          <p className="text-xs font-semibold">No notifications in this category</p>
+                          <p className="text-[10px] text-neutral-500 mt-0.5">
+                            All targeted alerts will appear here in real-time.
+                          </p>
                         </div>
                       ) : (
-                        announcements.slice(0, 10).map((ann) => {
-                          const isDispatch = ann.title.includes('Dispatched') || ann.title.includes('🚚');
-                          const isDelivered = ann.title.includes('Delivered') || ann.title.includes('Confirmed') || ann.title.includes('✅');
-                          const isReady = ann.title.includes('Ready') || ann.title.includes('📦');
-
-                          let badgeColor = 'bg-[#80C7F2]/15 text-[#1a7bb5] dark:text-[#80C7F2] border-[#80C7F2]/30';
-                          if (isDelivered) {
-                            badgeColor = 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/30';
-                          } else if (isDispatch) {
-                            badgeColor = 'bg-sky-500/15 text-sky-600 dark:text-sky-400 border-sky-500/30';
-                          } else if (isReady) {
-                            badgeColor = 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30';
-                          }
+                        displayedNotifications.map((ann) => {
+                          const isRead = ann.readBy?.includes(currentUser.id);
 
                           return (
                             <div
                               key={ann.id}
-                              className={`p-2.5 rounded-xl border transition-all ${
-                                isDark ? 'bg-neutral-900 border-neutral-800' : 'bg-neutral-50/80 border-neutral-200/80'
+                              onClick={() => markAnnouncementAsRead(ann.id)}
+                              className={`p-2.5 rounded-xl border transition-all cursor-pointer relative ${
+                                !isRead
+                                  ? isDark
+                                    ? 'bg-neutral-900 border-[#80C7F2]/40 shadow-xs ring-1 ring-[#80C7F2]/20'
+                                    : 'bg-sky-50/40 border-[#80C7F2]/40 shadow-xs ring-1 ring-[#80C7F2]/20'
+                                  : isDark
+                                  ? 'bg-neutral-900/60 border-neutral-800 hover:border-neutral-700'
+                                  : 'bg-neutral-50 border-neutral-200/80 hover:border-neutral-300'
                               }`}
                             >
-                              <div className="flex items-start space-x-2">
-                                <span className={`p-1 rounded-md border shrink-0 mt-0.5 ${badgeColor}`}>
-                                  <Sparkles className="w-3 h-3" />
+                              {/* Unread indicator dot */}
+                              {!isRead && (
+                                <span className="absolute top-2.5 right-2.5 w-2 h-2 rounded-full bg-[#F37021]" />
+                              )}
+
+                              {/* WHAT KIND, WHERE, and WHO Badges */}
+                              <div className="mb-1.5 pr-4">
+                                <NotificationBadgeGroup announcement={ann} compact={true} />
+                              </div>
+
+                              {/* Title & Message */}
+                              <p className="font-bold text-xs leading-snug text-neutral-900 dark:text-neutral-100">
+                                {ann.title}
+                              </p>
+                              <p className="text-[11px] text-neutral-600 dark:text-neutral-300 mt-1 leading-relaxed line-clamp-2">
+                                {ann.message}
+                              </p>
+
+                              {/* Footer Details: Author & Timestamp */}
+                              <div className="flex items-center justify-between text-[9.5px] text-neutral-400 mt-2 pt-1.5 border-t border-neutral-200/60 dark:border-neutral-800">
+                                <span>
+                                  {ann.authorName ? `By: ${ann.authorName}` : 'Central System'}
                                 </span>
-                                <div className="min-w-0 flex-1">
-                                  <p className="font-bold text-xs leading-snug text-neutral-900 dark:text-neutral-100">
-                                    {ann.title}
-                                  </p>
-                                  <p className="text-[11px] text-neutral-600 dark:text-neutral-300 mt-1 leading-relaxed line-clamp-3">
-                                    {ann.message}
-                                  </p>
-                                  <p className="text-[9.5px] text-neutral-400 mt-1 font-mono">
-                                    {new Date(ann.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} • {new Date(ann.createdAt).toLocaleDateString([], { month: 'short', day: 'numeric' })}
-                                  </p>
+                                <div className="flex items-center space-x-2">
+                                  <span>
+                                    {new Date(ann.createdAt).toLocaleTimeString([], {
+                                      hour: '2-digit',
+                                      minute: '2-digit',
+                                    })}{' '}
+                                    •{' '}
+                                    {new Date(ann.createdAt).toLocaleDateString([], {
+                                      month: 'short',
+                                      day: 'numeric',
+                                    })}
+                                  </span>
+
+                                  {ann.actionUrl && onNavigateTab && (
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        markAnnouncementAsRead(ann.id);
+                                        setShowNotificationMenu(false);
+                                        onNavigateTab(ann.actionUrl!);
+                                      }}
+                                      className="font-bold text-[#1a7bb5] dark:text-[#80C7F2] hover:underline flex items-center space-x-0.5"
+                                    >
+                                      <span>Open</span>
+                                      <ExternalLink className="w-2.5 h-2.5" />
+                                    </button>
+                                  )}
                                 </div>
                               </div>
                             </div>
@@ -361,20 +534,28 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
                         })
                       )}
                     </div>
+
+                    {/* Popover Footer Link */}
+                    <div className="p-2.5 border-t border-neutral-200 dark:border-neutral-800 bg-neutral-50/70 dark:bg-neutral-900/50 flex items-center justify-between text-xs">
+                      <span className="text-[10px] text-neutral-400">
+                        {userNotifications.length} total alerts for you
+                      </span>
+                      {onNavigateTab && (
+                        <button
+                          onClick={() => {
+                            setShowNotificationMenu(false);
+                            onNavigateTab('announcements');
+                          }}
+                          className="text-[10.5px] font-bold text-[#F37021] hover:underline"
+                        >
+                          View All Bulletins →
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </>
               )}
             </div>
-
-            {/* Diagnostic Security Test Suite */}
-            <button
-              id="top-security-tests-btn"
-              onClick={onOpenTesterModal}
-              className="p-2 rounded-xl border transition-colors bg-emerald-500/10 border-emerald-500/25 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20"
-              title="Open System Security & Integrity Test Suite"
-            >
-              <FlaskConical className="w-3.5 h-3.5" />
-            </button>
 
             {/* Theme Toggle */}
             <button
@@ -396,14 +577,14 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
               <RotateCcw className="w-3.5 h-3.5" />
             </button>
 
-            {/* Logout */}
+            {/* Logout Text Button */}
             <button
               id="top-logout-btn"
               onClick={logout}
-              className="p-2 rounded-xl border transition-colors bg-neutral-100 dark:bg-neutral-800 border-neutral-200 dark:border-neutral-700 text-neutral-500 hover:text-neutral-900 dark:hover:text-white hover:bg-neutral-200 dark:hover:bg-neutral-700"
+              className="px-3 py-1.5 rounded-xl border text-xs font-semibold transition-colors bg-neutral-100 dark:bg-neutral-800 border-neutral-200 dark:border-neutral-700 text-neutral-700 dark:text-neutral-200 hover:bg-neutral-200 dark:hover:bg-neutral-700 hover:text-red-600 dark:hover:text-red-400 cursor-pointer"
               title="Log Out"
             >
-              <LogOut className="w-3.5 h-3.5" />
+              Log Out
             </button>
           </div>
         </div>

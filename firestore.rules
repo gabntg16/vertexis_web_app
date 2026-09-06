@@ -117,6 +117,30 @@ service cloud.firestore {
     match /shift_closings/{shiftId} {
       allow read, write: if true;
     }
+
+    // Spoilage, Shrinkage & Waste Tracking
+    match /spoilage_records/{docId} {
+      allow read, write: if true;
+    }
+    match /spoilageRecords/{docId} {
+      allow read, write: if true;
+    }
+
+    // Physical Inventory Audits & Reconciliations
+    match /physical_audits/{docId} {
+      allow read, write: if true;
+    }
+    match /physicalAudits/{docId} {
+      allow read, write: if true;
+    }
+    match /physical_inventory_audits/{docId} {
+      allow read, write: if true;
+    }
+
+    // Connection Health Check
+    match /test/{docId} {
+      allow read, write: if true;
+    }
   }
 }
 

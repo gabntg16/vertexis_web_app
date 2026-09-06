@@ -17,9 +17,10 @@ import { AdminAnnouncements } from './components/admin/AdminAnnouncements';
 
 // Branch Views
 import { BranchDashboard } from './components/branch/BranchDashboard';
-import { BranchSalesPOS } from './components/branch/BranchSalesPOS';
 import { BranchOrders } from './components/branch/BranchOrders';
 import { BranchInventory } from './components/branch/BranchInventory';
+import { BranchWastageLog } from './components/branch/BranchWastageLog';
+import { BranchPhysicalAudit } from './components/branch/BranchPhysicalAudit';
 import { BranchLogistics } from './components/branch/BranchLogistics';
 import { BranchHistory } from './components/branch/BranchHistory';
 import { BranchCalendar } from './components/branch/BranchCalendar';
@@ -54,8 +55,6 @@ const MainShell: React.FC = () => {
         setActiveTab={setActiveTab}
         isMobileOpen={isMobileOpen}
         setIsMobileOpen={setIsMobileOpen}
-        onOpenResetModal={() => setShowConfirmReset(true)}
-        onOpenTesterModal={() => setShowTesterModal(true)}
       />
 
       {/* Main Content Area */}
@@ -65,7 +64,7 @@ const MainShell: React.FC = () => {
           activeTab={activeTab}
           onToggleMobileMenu={() => setIsMobileOpen(!isMobileOpen)}
           onOpenResetModal={() => setShowConfirmReset(true)}
-          onOpenTesterModal={() => setShowTesterModal(true)}
+          onNavigateTab={setActiveTab}
         />
 
         {/* View Content */}
@@ -83,14 +82,27 @@ const MainShell: React.FC = () => {
             </>
           ) : (
             <>
-              {activeTab === 'dashboard' && <BranchDashboard onNavigateTab={setActiveTab} />}
-              {activeTab === 'sales_pos' && <BranchSalesPOS />}
-              {activeTab === 'orders' && <BranchOrders />}
-              {activeTab === 'inventory' && <BranchInventory onNavigateTab={setActiveTab} />}
-              {activeTab === 'logistics' && <BranchLogistics />}
+              {(activeTab === 'dashboard' || activeTab === 'overview' || activeTab === 'sales_pos') && (
+                <BranchDashboard onNavigateTab={setActiveTab} />
+              )}
+              {(activeTab === 'orders' || activeTab === 'reorder') && (
+                <BranchOrders />
+              )}
+              {activeTab === 'inventory' && (
+                <BranchInventory onNavigateTab={setActiveTab} />
+              )}
+              {activeTab === 'wastage' && (
+                <BranchWastageLog />
+              )}
+              {activeTab === 'physical_audit' && (
+                <BranchPhysicalAudit onRequisitionRedirect={() => setActiveTab('orders')} />
+              )}
+              {(activeTab === 'logistics' || activeTab === 'deliveries') && (
+                <BranchLogistics />
+              )}
               {activeTab === 'history' && <BranchHistory />}
               {activeTab === 'calendar' && <BranchCalendar />}
-              {activeTab === 'announcements' && <BranchAnnouncements />}
+              {activeTab === 'announcements' && <BranchAnnouncements onNavigateTab={setActiveTab} />}
             </>
           )}
         </main>

@@ -116,6 +116,7 @@ export const BranchOrders: React.FC = () => {
     uploadPaymentProof,
     getOrdersForBranch,
     getInventoryForBranch,
+    getDetailedDemandAnalyticsForBranch,
     deliveries,
     themeMode,
   } = useData();
@@ -137,6 +138,35 @@ export const BranchOrders: React.FC = () => {
   const branchOrders = getOrdersForBranch(branchId);
   const branchInventory = getInventoryForBranch(branchId);
   const isDark = themeMode === 'dark';
+
+  const handleAutoFillFromDemand = () => {
+    const analytics = getDetailedDemandAnalyticsForBranch(branchId);
+    const suggestedQuantities: Record<string, number> = {};
+    let totalSuggested = 0;
+
+    analytics.forEach((a) => {
+      if (a.suggestedOrderQuantity > 0) {
+        suggestedQuantities[a.productId] = a.suggestedOrderQuantity;
+        totalSuggested += a.suggestedOrderQuantity;
+      }
+    });
+
+    // Automatically select the best tier based on total suggested packs
+    let targetTier: 'silver' | 'gold' | 'platinum' = 'silver';
+    if (totalSuggested >= 70) {
+      targetTier = 'platinum';
+    } else if (totalSuggested >= 55) {
+      targetTier = 'gold';
+    } else {
+      targetTier = 'silver';
+    }
+    setSelectedTierId(targetTier);
+    setQuantities(suggestedQuantities);
+    setOrderSuccessMsg(
+      `Auto-filled ${totalSuggested} packs based on Exponential Smoothing (α=0.3) demand velocity (Wastage isolated).`
+    );
+    setTimeout(() => setOrderSuccessMsg(null), 5000);
+  };
 
   // Filtered & Sorted orders
   const filteredAndSortedOrders = branchOrders
@@ -450,6 +480,15 @@ export const BranchOrders: React.FC = () => {
               >
                 Total: {totalPacks} {currentTier.maxCap < 900 ? `/ ${currentTier.maxCap} max packs` : 'packs'}
               </span>
+              <button
+                type="button"
+                onClick={handleAutoFillFromDemand}
+                className="px-2.5 py-1 rounded-xl text-xs font-bold bg-[#F37021]/15 text-[#d85e15] dark:text-[#F37021] hover:bg-[#F37021] hover:text-white transition-all flex items-center space-x-1 cursor-pointer"
+                title="Auto-fill recommended quantities based on Single Exponential Smoothing (α=0.3)"
+              >
+                <Sparkles className="w-3 h-3" />
+                <span>Auto-Fill (α=0.3)</span>
+              </button>
               <button
                 onClick={() => setQuantities({})}
                 disabled={totalPacks === 0}

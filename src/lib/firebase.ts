@@ -1,5 +1,11 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getFirestore, Firestore } from 'firebase/firestore';
+import {
+  initializeFirestore,
+  getFirestore,
+  Firestore,
+  doc,
+  getDocFromServer,
+} from 'firebase/firestore';
 import baseConfig from '../../firebase-applet-config.json';
 
 // Safely merge environment variables with fallback configuration
@@ -16,25 +22,47 @@ const firebaseConfig = {
 let app;
 let db: Firestore;
 
+const databaseId =
+  firebaseConfig.firestoreDatabaseId && firebaseConfig.firestoreDatabaseId.trim() !== ''
+    ? firebaseConfig.firestoreDatabaseId
+    : '(default)';
+
 try {
   app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
-  const databaseId =
-    firebaseConfig.firestoreDatabaseId && firebaseConfig.firestoreDatabaseId.trim() !== ''
-      ? firebaseConfig.firestoreDatabaseId
-      : '(default)';
-
-  db = getFirestore(app, databaseId);
-  console.log('[Firebase] Initialized with database ID:', databaseId);
+  // In container and sandboxed iframe environments, WebChannel streaming can trigger
+  // code=unavailable errors due to proxy buffering. experimentalForceLongPolling bypasses this.
+  db = initializeFirestore(
+    app,
+    {
+      experimentalForceLongPolling: true,
+      ignoreUndefinedProperties: true,
+    },
+    databaseId
+  );
+  console.log('[Firebase] Initialized with database ID (long-polling mode):', databaseId);
 } catch (err) {
-  console.warn('[Firebase] Primary initialization note:', err);
+  console.warn('[Firebase] initializeFirestore note, falling back to getFirestore:', err);
   try {
     app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
-    db = getFirestore(app);
+    db = getFirestore(app, databaseId);
   } catch (fallbackErr) {
     console.warn('[Firebase] Fallback initialization note:', fallbackErr);
     app = getApp();
     db = getFirestore(app);
   }
 }
+
+// Connection validation per Firebase integration guidelines
+async function testConnection() {
+  try {
+    await getDocFromServer(doc(db, 'system_sync', 'status'));
+    console.log('[Firebase] Cloud Firestore connection verified online.');
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('the client is offline')) {
+      console.warn('[Firebase] Operating in offline mode until connection is re-established.');
+    }
+  }
+}
+testConnection();
 
 export { app, db, firebaseConfig };

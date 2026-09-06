@@ -14,17 +14,14 @@ import {
   Boxes,
   Receipt,
   PackageCheck,
+  Trash2,
+  ClipboardCheck,
   ShieldCheck,
   Store,
   MapPin,
   UserCheck,
   ChevronDown,
-  Sun,
-  Moon,
   LogOut,
-  RotateCcw,
-  FlaskConical,
-  CloudCheck,
   CloudOff,
   RefreshCw,
   X,
@@ -37,8 +34,8 @@ interface SidebarProps {
   setActiveTab: (tab: string) => void;
   isMobileOpen: boolean;
   setIsMobileOpen: (open: boolean) => void;
-  onOpenResetModal: () => void;
-  onOpenTesterModal: () => void;
+  onOpenResetModal?: () => void;
+  onOpenTesterModal?: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -46,16 +43,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
   setActiveTab,
   isMobileOpen,
   setIsMobileOpen,
-  onOpenResetModal,
-  onOpenTesterModal,
 }) => {
   const {
     currentUser,
     users,
     currentBranch,
-    themeMode,
     syncState,
-    toggleTheme,
     switchUser,
     logout,
     forceSyncCloud,
@@ -72,7 +65,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
   if (!currentUser) return null;
 
   const isAdmin = currentUser.role === 'admin';
-  const isDark = themeMode === 'dark';
 
   const handleManualSync = async () => {
     try {
@@ -133,15 +125,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   const branchTabs = [
     { id: 'dashboard', label: 'Overview', icon: LayoutDashboard },
-    { id: 'sales_pos', label: 'Counter Terminal', icon: CreditCard },
     {
       id: 'orders',
-      label: 'Order Stock',
+      label: 'Order Stock / Requisitions',
       icon: ShoppingBag,
       badge: branchReadyOrdersCount > 0 ? branchReadyOrdersCount : undefined,
       badgeColor: 'bg-emerald-500 text-white',
     },
-    { id: 'inventory', label: 'Inventory', icon: Boxes },
+    { id: 'inventory', label: 'Inventory & Physical Audits', icon: Boxes },
+    { id: 'wastage', label: 'Wastage Log', icon: Trash2 },
     {
       id: 'logistics',
       label: 'Inbound Deliveries',
@@ -387,48 +379,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
           )}
         </button>
 
-        {/* Action Button Grid */}
-        <div className={`grid ${isCollapsed && !isMobileOpen ? 'grid-cols-1' : 'grid-cols-4'} gap-1`}>
-          {/* Security Test Suite */}
-          <button
-            id="security-test-suite-btn"
-            onClick={onOpenTesterModal}
-            className="p-2 rounded-xl border flex items-center justify-center transition-all bg-emerald-500/10 border-emerald-500/25 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20"
-            title="System Security & Integrity Test Suite"
-          >
-            <FlaskConical className="w-3.5 h-3.5" />
-          </button>
-
-          {/* Dark/Light Mode */}
-          <button
-            id="theme-toggle-btn"
-            onClick={toggleTheme}
-            className="p-2 rounded-xl border flex items-center justify-center transition-colors bg-neutral-100 dark:bg-neutral-800 border-neutral-200 dark:border-neutral-700 text-neutral-700 dark:text-amber-300 hover:bg-neutral-200 dark:hover:bg-neutral-700"
-            title={isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
-          >
-            {isDark ? <Sun className="w-3.5 h-3.5" /> : <Moon className="w-3.5 h-3.5" />}
-          </button>
-
-          {/* Reset DB */}
-          <button
-            id="reset-db-btn"
-            onClick={onOpenResetModal}
-            className="p-2 rounded-xl border flex items-center justify-center transition-colors bg-neutral-100 dark:bg-neutral-800 border-neutral-200 dark:border-neutral-700 text-neutral-500 hover:text-red-500 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10"
-            title="Reset Sample Data"
-          >
-            <RotateCcw className="w-3.5 h-3.5" />
-          </button>
-
-          {/* Logout */}
-          <button
-            id="logout-btn"
-            onClick={logout}
-            className="p-2 rounded-xl border flex items-center justify-center transition-colors bg-neutral-100 dark:bg-neutral-800 border-neutral-200 dark:border-neutral-700 text-neutral-500 hover:text-neutral-900 dark:hover:text-white hover:bg-neutral-200 dark:hover:bg-neutral-700"
-            title="Log Out"
-          >
-            <LogOut className="w-3.5 h-3.5" />
-          </button>
-        </div>
+        {/* Logout Button */}
+        <button
+          id="logout-btn"
+          onClick={logout}
+          className={`w-full flex items-center justify-center ${
+            !isCollapsed || isMobileOpen ? 'space-x-2 px-3 py-2 text-xs font-semibold' : 'p-2'
+          } rounded-xl border transition-colors bg-neutral-100 dark:bg-neutral-800 border-neutral-200 dark:border-neutral-700 text-neutral-600 dark:text-neutral-300 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30 cursor-pointer`}
+          title="Log Out"
+        >
+          <LogOut className="w-3.5 h-3.5 shrink-0" />
+          {(!isCollapsed || isMobileOpen) && <span>Log Out</span>}
+        </button>
       </div>
     </div>
   );

@@ -1,4 +1,4 @@
-import { Order, OrderItem, ProductionStage, BatchStage, Sale, InventoryItem, Product } from '../types';
+import { Order, OrderItem, ProductionStage, BatchStage, Sale, InventoryItem, Product, UserRole, Role, RoleType, UserModel } from '../types';
 
 /**
  * Security, RBAC, and Business Logic Validation Engine
@@ -10,16 +10,41 @@ export interface ValidationResult {
   error?: string;
 }
 
+// Helper predicates for 3-Tier RBAC Architecture
+export function isSuperAdmin(user?: UserModel | null | string): boolean {
+  if (!user) return false;
+  const roleStr = typeof user === 'string' ? user : (user.role as string);
+  return roleStr === Role.SUPER_ADMIN || roleStr === 'SUPER_ADMIN' || roleStr === 'admin';
+}
+
+export function isBranchManager(user?: UserModel | null | string): boolean {
+  if (!user) return false;
+  const roleStr = typeof user === 'string' ? user : (user.role as string);
+  return roleStr === Role.BRANCH_MANAGER || roleStr === 'BRANCH_MANAGER';
+}
+
+export function isBranchStaff(user?: UserModel | null | string): boolean {
+  if (!user) return false;
+  const roleStr = typeof user === 'string' ? user : (user.role as string);
+  return roleStr === Role.BRANCH_STAFF || roleStr === 'BRANCH_STAFF';
+}
+
 // 1. RBAC & Cross-Branch Authorization Guard
 export function validateBranchAccess(
-  userRole: 'admin' | 'branch',
+  userRole: Role | UserRole | RoleType | 'admin' | 'branch' | string,
   userBranchId: string | undefined,
   targetBranchId: string
 ): ValidationResult {
-  if (userRole === 'admin') {
+  if (userRole === Role.SUPER_ADMIN || userRole === 'SUPER_ADMIN' || userRole === 'admin') {
     return { valid: true };
   }
-  if (userRole === 'branch') {
+  if (
+    userRole === Role.BRANCH_MANAGER ||
+    userRole === 'BRANCH_MANAGER' ||
+    userRole === Role.BRANCH_STAFF ||
+    userRole === 'BRANCH_STAFF' ||
+    userRole === 'branch'
+  ) {
     if (!userBranchId) {
       return { valid: false, error: 'Access Denied: Unassigned branch user.' };
     }
@@ -32,6 +57,47 @@ export function validateBranchAccess(
     return { valid: true };
   }
   return { valid: false, error: 'Unknown role authorization.' };
+}
+
+// 1.1 Action-Specific RBAC Guards
+export function validateRequisitionCreation(userRole: string): ValidationResult {
+  if (userRole === Role.BRANCH_STAFF || userRole === 'BRANCH_STAFF') {
+    return {
+      valid: false,
+      error: 'Access Denied: Branch Staff are strictly restricted from drafting or placing stock requisitions.',
+    };
+  }
+  return { valid: true };
+}
+
+export function validatePaymentProofUpload(userRole: string): ValidationResult {
+  if (userRole === Role.BRANCH_STAFF || userRole === 'BRANCH_STAFF') {
+    return {
+      valid: false,
+      error: 'Access Denied: Branch Staff are strictly restricted from uploading Proof of Payment receipts.',
+    };
+  }
+  return { valid: true };
+}
+
+export function validateShiftLogApproval(userRole: string): ValidationResult {
+  if (userRole === Role.BRANCH_STAFF || userRole === 'BRANCH_STAFF') {
+    return {
+      valid: false,
+      error: 'Access Denied: Branch Staff are restricted from approving or locking inventory logs.',
+    };
+  }
+  return { valid: true };
+}
+
+export function validatePriceChange(userRole: string): ValidationResult {
+  if (!isSuperAdmin(userRole)) {
+    return {
+      valid: false,
+      error: 'Access Denied: Only Super Admin (Headquarters) can alter global menu pricing and SKUs.',
+    };
+  }
+  return { valid: true };
 }
 
 // 2. Order Line Item & Math Integrity Guard

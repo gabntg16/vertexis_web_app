@@ -26,9 +26,6 @@ interface BranchAccountsModalProps {
 
 const AVAILABLE_ROLES: BranchAccountRole[] = [
   'Branch Manager',
-  'Assistant Manager',
-  'Cashier',
-  'Inventory Specialist',
   'Staff',
 ];
 
