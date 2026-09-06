@@ -52,7 +52,7 @@ export const ManagerInterBranchTransfers: React.FC = () => {
 
   // Transfers relevant to this branch (either origin or destination)
   const branchTransfers = useMemo(() => {
-    return interBranchTransfers.filter(
+    return (interBranchTransfers || []).filter(
       (t) => t.fromBranchId === branchId || t.toBranchId === branchId
     );
   }, [interBranchTransfers, branchId]);

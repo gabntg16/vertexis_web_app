@@ -13,20 +13,47 @@ export interface ValidationResult {
 // Helper predicates for 3-Tier RBAC Architecture
 export function isSuperAdmin(user?: UserModel | null | string): boolean {
   if (!user) return false;
-  const roleStr = typeof user === 'string' ? user : (user.role as string);
-  return roleStr === Role.SUPER_ADMIN || roleStr === 'SUPER_ADMIN' || roleStr === 'admin';
+  if (typeof user !== 'string') {
+    if (user.rbacTier) {
+      return user.rbacTier === 'SUPER_ADMIN';
+    }
+    const roleStr = user.role as string;
+    return roleStr === Role.SUPER_ADMIN || roleStr === 'SUPER_ADMIN' || roleStr === 'admin';
+  }
+  return user === Role.SUPER_ADMIN || user === 'SUPER_ADMIN' || user === 'admin';
 }
 
 export function isBranchManager(user?: UserModel | null | string): boolean {
   if (!user) return false;
-  const roleStr = typeof user === 'string' ? user : (user.role as string);
-  return roleStr === Role.BRANCH_MANAGER || roleStr === 'BRANCH_MANAGER';
+  if (typeof user !== 'string') {
+    if (user.rbacTier) {
+      return user.rbacTier === 'BRANCH_MANAGER';
+    }
+    const roleStr = user.role as string;
+    return (
+      roleStr === Role.BRANCH_MANAGER ||
+      roleStr === 'BRANCH_MANAGER' ||
+      (roleStr === 'branch' && !user.name?.toLowerCase().includes('staff'))
+    );
+  }
+  return user === Role.BRANCH_MANAGER || user === 'BRANCH_MANAGER' || user === 'branch';
 }
 
 export function isBranchStaff(user?: UserModel | null | string): boolean {
   if (!user) return false;
-  const roleStr = typeof user === 'string' ? user : (user.role as string);
-  return roleStr === Role.BRANCH_STAFF || roleStr === 'BRANCH_STAFF';
+  if (typeof user !== 'string') {
+    if (user.rbacTier) {
+      return user.rbacTier === 'BRANCH_STAFF';
+    }
+    const roleStr = user.role as string;
+    return (
+      roleStr === Role.BRANCH_STAFF ||
+      roleStr === 'BRANCH_STAFF' ||
+      roleStr === 'staff' ||
+      (roleStr === 'branch' && (user.name?.toLowerCase().includes('staff') || user.email?.toLowerCase().includes('staff')))
+    );
+  }
+  return user === Role.BRANCH_STAFF || user === 'BRANCH_STAFF' || user === 'staff';
 }
 
 // 1. RBAC & Cross-Branch Authorization Guard
@@ -98,6 +125,52 @@ export function validatePriceChange(userRole: string): ValidationResult {
     };
   }
   return { valid: true };
+}
+
+export function validateOrderApprovalAccess(userRole: string): ValidationResult {
+  if (!isSuperAdmin(userRole)) {
+    return {
+      valid: false,
+      error: 'Access Denied: Only Headquarters Super Admin can issue final order approvals and verify digital payments.',
+    };
+  }
+  return { valid: true };
+}
+
+export function validateUserManagementAccess(userRole: string): ValidationResult {
+  if (!isSuperAdmin(userRole)) {
+    return {
+      valid: false,
+      error: 'Access Denied: Only Super Admin can manage system users and assign RBAC roles.',
+    };
+  }
+  return { valid: true };
+}
+
+export function validateAnalyticsAccess(
+  userRole: string,
+  userBranchId?: string,
+  targetBranchId?: string
+): ValidationResult {
+  if (isBranchStaff(userRole)) {
+    return {
+      valid: false,
+      error: 'Access Denied: Branch Staff are restricted from viewing sales, analytics, and price lists.',
+    };
+  }
+  if (isBranchManager(userRole)) {
+    if (targetBranchId && userBranchId && userBranchId !== targetBranchId) {
+      return {
+        valid: false,
+        error: `Cross-Branch Violation: Branch Managers can only view analytics for their assigned branch (${userBranchId}).`,
+      };
+    }
+    return { valid: true };
+  }
+  if (isSuperAdmin(userRole)) {
+    return { valid: true };
+  }
+  return { valid: false, error: 'Unauthorized role.' };
 }
 
 // 2. Order Line Item & Math Integrity Guard

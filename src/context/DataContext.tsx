@@ -1017,7 +1017,11 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const cleanEmail = email.trim().toLowerCase();
     const found = users.find(
       (u) =>
-        (u.email?.toLowerCase() === cleanEmail || u.username?.toLowerCase() === cleanEmail) &&
+        (u.email?.toLowerCase() === cleanEmail ||
+          u.username?.toLowerCase() === cleanEmail ||
+          (cleanEmail === 'legazpi@marshbites.com' && u.email?.toLowerCase().includes('legazpi.manager')) ||
+          (cleanEmail === 'cabuyao@marshbites.com' && u.email?.toLowerCase().includes('cabuyao.manager')) ||
+          (cleanEmail === 'makati@marshbites.com' && u.email?.toLowerCase().includes('makati.manager'))) &&
         (u.password === pass || !pass || pass === 'staff123' || pass === 'branch123' || pass === 'admin123')
     );
     if (found) {
@@ -4811,7 +4815,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         error = 'Daily shift log record not found.';
         return prev;
       }
-      if (target.status === DailyLogStatus.VALIDATED) {
+      if (target.status === DailyLogStatus.VALIDATED_AND_LOCKED) {
         error = 'This daily shift log is already validated and locked.';
         return prev;
       }
@@ -4833,6 +4837,13 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const validateAndLockDailyLog = useCallback(
     (logId: string, managerNotes?: string) => {
+      if (currentUser && (currentUser.role === Role.BRANCH_STAFF || currentUser.role === 'BRANCH_STAFF')) {
+        return {
+          success: false,
+          error: 'Access Denied: Branch Staff are strictly restricted from validating or locking shift logs.',
+        };
+      }
+
       let success = false;
       let error: string | undefined;
 
@@ -4842,7 +4853,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
           error = 'Daily shift log not found.';
           return prev;
         }
-        if (target.status === DailyLogStatus.VALIDATED) {
+        if (target.status === DailyLogStatus.VALIDATED_AND_LOCKED) {
           error = 'Shift log is already validated and locked.';
           return prev;
         }
@@ -4851,10 +4862,11 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
           l.id === logId
             ? {
                 ...l,
-                status: DailyLogStatus.VALIDATED,
+                status: DailyLogStatus.VALIDATED_AND_LOCKED,
                 validatedByManagerId: currentUser?.id || 'mgr-1',
                 validatedByManagerName: currentUser?.name || 'Branch Manager',
                 validatedAt: new Date().toISOString(),
+                lockedAt: new Date().toISOString(),
                 managerNotes: managerNotes || l.managerNotes,
                 updatedAt: new Date().toISOString(),
               }
@@ -4873,9 +4885,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const today = new Date().toISOString().split('T')[0];
 
       setDailyShiftLogs((prev) => {
-        let existing = prev.find((l) => l.branchId === branchId && l.date === today);
+        const existing = prev.find((l) => l.branchId === branchId && l.date === today);
         if (existing) {
-          if (existing.status === DailyLogStatus.VALIDATED) {
+          if (existing.status === DailyLogStatus.VALIDATED_AND_LOCKED) {
             return prev;
           }
           const updatedSales: DailyManualSalesItem[] = salesList.map((s, idx) => ({
@@ -4937,9 +4949,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const today = new Date().toISOString().split('T')[0];
 
       setDailyShiftLogs((prev) => {
-        let existing = prev.find((l) => l.branchId === branchId && l.date === today);
+        const existing = prev.find((l) => l.branchId === branchId && l.date === today);
         if (existing) {
-          if (existing.status === DailyLogStatus.VALIDATED) return prev;
+          if (existing.status === DailyLogStatus.VALIDATED_AND_LOCKED) return prev;
           return prev.map((l) =>
             l.id === existing!.id
               ? { ...l, physicalCounts: counts, updatedAt: new Date().toISOString() }
@@ -4980,9 +4992,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       };
 
       setDailyShiftLogs((prev) => {
-        let existing = prev.find((l) => l.branchId === branchId && l.date === today);
+        const existing = prev.find((l) => l.branchId === branchId && l.date === today);
         if (existing) {
-          if (existing.status === DailyLogStatus.VALIDATED) return prev;
+          if (existing.status === DailyLogStatus.VALIDATED_AND_LOCKED) return prev;
           return prev.map((l) =>
             l.id === existing!.id
               ? {
@@ -5028,9 +5040,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       };
 
       setDailyShiftLogs((prev) => {
-        let existing = prev.find((l) => l.branchId === branchId && l.date === today);
+        const existing = prev.find((l) => l.branchId === branchId && l.date === today);
         if (existing) {
-          if (existing.status === DailyLogStatus.VALIDATED) return prev;
+          if (existing.status === DailyLogStatus.VALIDATED_AND_LOCKED) return prev;
           return prev.map((l) =>
             l.id === existing!.id
               ? {
@@ -5288,6 +5300,22 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         approvePaymentProof,
         rejectPaymentProof,
         confirmStockArrival,
+        // 3-Tier RBAC Daily Shift Logs & Lateral Transfers
+        dailyShiftLogs,
+        interBranchTransfers,
+        getDailyLogForBranch,
+        saveDailyLogDraft,
+        submitDailyLogForValidation,
+        validateAndLockDailyLog,
+        addManualSalesToDailyLog,
+        addPhysicalCountsToDailyLog,
+        addSpoilageToDailyLog,
+        addInboundToDailyLog,
+        createInterBranchTransfer,
+        updateTransferStatus,
+        updateProductPricing,
+        updateUserRole,
+        addNewUser,
       }}
     >
       {children}

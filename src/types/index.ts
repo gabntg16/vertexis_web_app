@@ -222,6 +222,12 @@ export interface Order {
 }
 
 export type SpoilageReason =
+  | 'Expired Shelf Life'
+  | 'Melted / Heat Damaged'
+  | 'Packaging Seal Compromised'
+  | 'Dropped / Crushed in Handling'
+  | 'Quality Defect'
+  | 'Transit / Delivery Damage'
   | 'Expired'
   | 'Transport Damage'
   | 'Production Defect'
@@ -250,6 +256,10 @@ export type DiscrepancyCategory =
   | 'Unrecorded Sample / Spoilage'
   | 'Suspected Theft / Loss'
   | 'Damaged Found Unlogged'
+  | 'Shortage / Suspected Shrinkage'
+  | 'Unrecorded Free Samples / Promo'
+  | 'Cashier Punch Mismatch'
+  | 'Transit Loss'
   | 'Normal Variance';
 
 export interface PhysicalAuditItem {
@@ -262,7 +272,7 @@ export interface PhysicalAuditItem {
   discrepancyType: 'Matched' | 'Shortage' | 'Overage';
   unitPrice: number;
   wholesaleCost: number;
-  discrepancyValue: number; // discrepancy * wholesaleCost
+  discrepancyValue: number; // discrepancy * wholesaleCost (negative if shortage)
   notes?: string;
 }
 
@@ -689,76 +699,6 @@ export interface CalendarEvent {
   type: CalendarEventType;
   branchId?: string;
   branchName?: string;
-}
-
-// ----------------------------------------------------
-// B2B Inter-Branch Requisitions, Spoilage & Physical Audit Types
-// ----------------------------------------------------
-
-export type SpoilageReason =
-  | 'Expired Shelf Life'
-  | 'Melted / Heat Damaged'
-  | 'Packaging Seal Compromised'
-  | 'Dropped / Crushed in Handling'
-  | 'Quality Defect'
-  | 'Transit / Delivery Damage';
-
-export interface SpoilageRecord {
-  id: string;
-  branchId: string;
-  branchName: string;
-  productId: string;
-  productName: string;
-  flavor: string;
-  quantity: number;
-  reason: SpoilageReason;
-  batchCode?: string;
-  reportedBy: string;
-  timestamp: string;
-  costImpact: number;
-  notes?: string;
-  excludedFromDemandForecast: boolean;
-}
-
-export type DiscrepancyCategory =
-  | 'Damaged Found Unlogged'
-  | 'Shortage / Suspected Shrinkage'
-  | 'Unrecorded Free Samples / Promo'
-  | 'Cashier Punch Mismatch'
-  | 'Transit Loss'
-  | 'Normal Variance';
-
-export interface PhysicalAuditItem {
-  productId: string;
-  productName: string;
-  flavor: string;
-  systemBookStock: number;
-  physicalCount: number;
-  discrepancy: number; // physicalCount - systemBookStock
-  discrepancyType: 'Matched' | 'Shortage' | 'Overage';
-  unitPrice: number;
-  wholesaleCost: number;
-  discrepancyValue: number; // discrepancy * wholesaleCost (negative if shortage)
-  notes?: string;
-}
-
-export interface PhysicalInventoryAudit {
-  id: string;
-  branchId: string;
-  branchName: string;
-  auditedBy: string;
-  auditorRole: string;
-  timestamp: string;
-  items: PhysicalAuditItem[];
-  totalSystemStock: number;
-  totalPhysicalCount: number;
-  totalDiscrepancyUnits: number;
-  totalShrinkageValue: number;
-  status: 'Submitted' | 'Reconciled';
-  discrepancyReasonCategory: DiscrepancyCategory;
-  notes?: string;
-  reconciledAt?: string;
-  reconciledBy?: string;
 }
 
 export interface ProductDemandAnalytics {

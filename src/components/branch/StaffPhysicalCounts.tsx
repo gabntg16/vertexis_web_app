@@ -33,7 +33,7 @@ export const StaffPhysicalCounts: React.FC = () => {
 
   // Retrieve today's log or fallback to default
   const todayLog = useMemo(() => {
-    return dailyShiftLogs.find((l) => l.branchId === branchId && l.date === today);
+    return (dailyShiftLogs || []).find((l) => l.branchId === branchId && l.date === today);
   }, [dailyShiftLogs, branchId, today]);
 
   const currentStatus = todayLog?.status || DailyLogStatus.DRAFT;

@@ -39,7 +39,7 @@ export const ManagerBranchAnalytics: React.FC<ManagerBranchAnalyticsProps> = ({
 
   // Branch-specific daily shift logs
   const branchLogs = useMemo(() => {
-    return dailyShiftLogs
+    return (dailyShiftLogs || [])
       .filter((l) => l.branchId === branchId)
       .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
   }, [dailyShiftLogs, branchId]);

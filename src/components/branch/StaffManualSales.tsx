@@ -33,7 +33,7 @@ export const StaffManualSales: React.FC = () => {
   const today = new Date().toISOString().split('T')[0];
 
   const todayLog = useMemo(() => {
-    return dailyShiftLogs.find((l) => l.branchId === branchId && l.date === today);
+    return (dailyShiftLogs || []).find((l) => l.branchId === branchId && l.date === today);
   }, [dailyShiftLogs, branchId, today]);
 
   const currentStatus = todayLog?.status || DailyLogStatus.DRAFT;

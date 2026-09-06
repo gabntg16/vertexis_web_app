@@ -33,7 +33,7 @@ export const ManagerLogValidation: React.FC = () => {
 
   // Branch logs
   const branchLogs = useMemo(() => {
-    return dailyShiftLogs
+    return (dailyShiftLogs || [])
       .filter((l) => l.branchId === branchId)
       .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
   }, [dailyShiftLogs, branchId]);

@@ -40,10 +40,11 @@ export const AdminUserManagement: React.FC = () => {
   const [newBranchId, setNewBranchId] = useState<string>('b-legazpi');
 
   const filteredUsers = useMemo(() => {
-    return users.filter((u) => {
+    return (users || []).filter((u) => {
       const matchSearch =
-        u.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        u.username.toLowerCase().includes(searchTerm.toLowerCase());
+        (u.name && u.name.toLowerCase().includes(searchTerm.toLowerCase())) ||
+        (u.email && u.email.toLowerCase().includes(searchTerm.toLowerCase())) ||
+        ((u as any).username && (u as any).username.toLowerCase().includes(searchTerm.toLowerCase()));
       const matchRole =
         roleFilter === 'all' ||
         u.role === roleFilter ||

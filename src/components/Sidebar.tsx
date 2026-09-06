@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useData } from '../context/DataContext';
 import marshbitesLogo from '../assets/images/marshbites_logo_1787964569459.jpg';
 import {
@@ -27,7 +27,12 @@ import {
   X,
   ChevronLeft,
   ChevronRight,
+  Users,
+  Tag,
+  ArrowLeftRight,
 } from 'lucide-react';
+import { isSuperAdmin, isBranchManager, isBranchStaff } from '../utils/securityValidator';
+import { DailyLogStatus } from '../types';
 
 interface SidebarProps {
   activeTab: string;
@@ -56,6 +61,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     readyForDispatchOrdersCount,
     deliveries,
     orders,
+    dailyShiftLogs,
   } = useData();
 
   const [showUserMenu, setShowUserMenu] = useState(false);
@@ -64,7 +70,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   if (!currentUser) return null;
 
-  const isAdmin = currentUser.role === 'admin';
+  const isSuper = isSuperAdmin(currentUser);
+  const isManager = isBranchManager(currentUser);
+  const isStaff = isBranchStaff(currentUser);
 
   const handleManualSync = async () => {
     try {
@@ -76,15 +84,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
   };
 
   // Badge counts
-  const branchInTransitCount = !isAdmin && currentBranch
-    ? deliveries.filter((d) => {
-        const order = orders.find((o) => o.id === d.orderId);
+  const branchInTransitCount = !isSuper && currentBranch
+    ? (deliveries || []).filter((d) => {
+        const order = (orders || []).find((o) => o.id === d.orderId);
         return order?.branchId === currentBranch.id && d.status === 'inTransit';
       }).length
     : 0;
 
-  const branchReadyOrdersCount = !isAdmin && currentBranch
-    ? orders.filter(
+  const branchReadyOrdersCount = !isSuper && currentBranch
+    ? (orders || []).filter(
         (o) =>
           o.branchId === currentBranch.id &&
           (o.productionStage === 'ready_for_dispatch' || (o.productionStage as string) === 'ready') &&
@@ -94,11 +102,47 @@ export const Sidebar: React.FC<SidebarProps> = ({
       ).length
     : 0;
 
-  const adminTabs = [
-    { id: 'dashboard', label: 'Overview', icon: LayoutDashboard },
+  // Pending logs awaiting validation by branch manager
+  const pendingValidationCount = useMemo(() => {
+    const bId = currentUser?.branchId || currentBranch?.id || 'b-legazpi';
+    return (dailyShiftLogs || []).filter(
+      (l) => l.branchId === bId && l.status === DailyLogStatus.PENDING_VALIDATION
+    ).length;
+  }, [dailyShiftLogs, currentUser, currentBranch]);
+
+  // 1. BRANCH_STAFF Navigation: Render ONLY Frontline Tabs
+  const staffTabs = [
+    { id: 'physical_counts', label: 'Daily Physical Counts', icon: ClipboardCheck },
+    { id: 'manual_sales', label: 'Manual Sales Entry', icon: Receipt },
+    { id: 'spoilage_wastage', label: 'Spoilage / Wastage', icon: Trash2 },
+    { id: 'inbound_receiving', label: 'Inbound Receiving', icon: PackageCheck },
+  ];
+
+  // 2. BRANCH_MANAGER Navigation: Render Store Leadership & Audit Tabs
+  const managerTabs = [
     {
-      id: 'orders',
-      label: 'Orders & Approvals',
+      id: 'log_validation',
+      label: 'Log Validation Dashboard',
+      icon: ShieldCheck,
+      badge: pendingValidationCount > 0 ? pendingValidationCount : undefined,
+      badgeColor: 'bg-[#F37021] text-white',
+    },
+    {
+      id: 'requisitions',
+      label: 'Create Requisition & Upload Payment',
+      icon: ShoppingBag,
+      badge: branchReadyOrdersCount > 0 ? branchReadyOrdersCount : undefined,
+      badgeColor: 'bg-emerald-500 text-white',
+    },
+    { id: 'branch_analytics', label: 'Branch Analytics', icon: TrendingUp },
+    { id: 'transfers', label: 'Inter-Branch Transfers', icon: ArrowLeftRight },
+  ];
+
+  // 3. SUPER_ADMIN Navigation: Render HQ Executive & Network Tabs
+  const adminPrimaryTabs = [
+    {
+      id: 'requisition_approval',
+      label: 'Requisition & Payment Approval',
       icon: ShoppingBag,
       badge:
         pendingOrdersCount + readyForDispatchOrdersCount > 0
@@ -109,6 +153,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
           ? 'bg-emerald-500 text-white'
           : 'bg-[#F37021] text-white',
     },
+    { id: 'network_analytics', label: 'Network Predictive Analytics', icon: TrendingUp },
+    { id: 'user_management', label: 'System Administration / RBAC', icon: Users },
+    { id: 'master_pricing', label: 'Master Inventory & Pricing', icon: Tag },
+  ];
+
+  const adminSecondaryTabs = [
     { id: 'production', label: 'Commissary Batching', icon: ChefHat },
     { id: 'branches', label: '19 Branches', icon: Building2 },
     {
@@ -118,41 +168,50 @@ export const Sidebar: React.FC<SidebarProps> = ({
       badge: readyForDispatchOrdersCount > 0 ? readyForDispatchOrdersCount : undefined,
       badgeColor: 'bg-emerald-500 text-white',
     },
-    { id: 'sales', label: 'Sales Analytics', icon: TrendingUp },
-    { id: 'calendar', label: 'Schedule', icon: Calendar },
     { id: 'announcements', label: 'Announcements', icon: Megaphone },
   ];
 
-  const branchTabs = [
-    { id: 'dashboard', label: 'Overview', icon: LayoutDashboard },
-    {
-      id: 'orders',
-      label: 'Order Stock / Requisitions',
-      icon: ShoppingBag,
-      badge: branchReadyOrdersCount > 0 ? branchReadyOrdersCount : undefined,
-      badgeColor: 'bg-emerald-500 text-white',
-    },
-    { id: 'inventory', label: 'Inventory & Physical Audits', icon: Boxes },
-    { id: 'wastage', label: 'Wastage Log', icon: Trash2 },
-    {
-      id: 'logistics',
-      label: 'Inbound Deliveries',
-      icon: PackageCheck,
-      badge: branchInTransitCount > 0 ? branchInTransitCount : undefined,
-      badgeColor: 'bg-[#80C7F2] text-neutral-900',
-    },
-    { id: 'history', label: 'Order Slip Records', icon: Receipt },
-    { id: 'calendar', label: 'Schedule', icon: Calendar },
-    { id: 'announcements', label: 'Bulletins', icon: Megaphone },
-  ];
-
-  const tabs = isAdmin ? adminTabs : branchTabs;
+  const tabs = isStaff ? staffTabs : isManager ? managerTabs : adminPrimaryTabs;
 
   const handleTabClick = (tabId: string) => {
     setActiveTab(tabId);
     setIsMobileOpen(false);
     window.scrollTo({ top: 0, behavior: 'instant' });
   };
+
+  const getRoleBadgeStyle = (user: typeof currentUser) => {
+    if (isSuperAdmin(user)) {
+      return {
+        bg: 'bg-amber-500/10 border-amber-500/30 text-amber-800 dark:text-amber-300',
+        badge: 'bg-amber-500/20 text-amber-700 dark:text-amber-300',
+        label: 'SUPER_ADMIN',
+        roleTitle: 'HQ Super Admin',
+        icon: ShieldCheck,
+        iconColor: 'text-amber-500',
+      };
+    }
+    if (isBranchManager(user)) {
+      return {
+        bg: 'bg-[#80C7F2]/10 border-[#80C7F2]/30 text-[#0c5077] dark:text-[#80C7F2]',
+        badge: 'bg-[#80C7F2]/20 text-[#0369a1] dark:text-[#80C7F2]',
+        label: 'BRANCH_MANAGER',
+        roleTitle: 'Store Lead',
+        icon: Store,
+        iconColor: 'text-[#80C7F2]',
+      };
+    }
+    return {
+      bg: 'bg-emerald-500/10 border-emerald-500/30 text-emerald-800 dark:text-emerald-300',
+      badge: 'bg-emerald-500/20 text-emerald-700 dark:text-emerald-300',
+      label: 'BRANCH_STAFF',
+      roleTitle: 'Frontline Staff',
+      icon: ClipboardCheck,
+      iconColor: 'text-emerald-500',
+    };
+  };
+
+  const currentRoleConfig = getRoleBadgeStyle(currentUser);
+  const RoleIcon = currentRoleConfig.icon;
 
   const sidebarContent = (
     <div className="flex flex-col h-full select-none">
@@ -185,7 +244,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 </span>
               </div>
               <p className="text-[11px] font-semibold text-neutral-500 dark:text-neutral-400 truncate tracking-tight mt-1">
-                {isAdmin ? 'Central Commissary HQ' : `${currentBranch?.name?.replace('Marsh Bites ', '') || 'Branch'} Station`}
+                {isSuper
+                  ? 'Central Commissary HQ'
+                  : `${currentBranch?.name?.replace('Marsh Bites ', '') || 'Branch'} Station`}
               </p>
             </div>
           )}
@@ -212,52 +273,61 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </button>
       </div>
 
-      {/* Role / Branch Switcher Card */}
+      {/* 3-Tier RBAC User & Role Switcher Card */}
       <div className="px-3 pt-3 pb-1">
         <div className="relative">
           <button
             id="user-switcher-btn"
             onClick={() => setShowUserMenu(!showUserMenu)}
-            className={`w-full flex items-center justify-between p-2.5 rounded-2xl border text-xs font-semibold transition-all ${
-              isAdmin
-                ? 'bg-amber-500/10 border-amber-500/30 text-amber-800 dark:text-amber-300 hover:bg-amber-500/15'
-                : 'bg-[#80C7F2]/10 border-[#80C7F2]/30 text-[#0c5077] dark:text-[#80C7F2] hover:bg-[#80C7F2]/15'
-            }`}
-            title="Switch User / Active Station"
+            className={`w-full flex items-center justify-between p-2.5 rounded-2xl border text-xs font-semibold transition-all ${currentRoleConfig.bg} hover:opacity-90`}
+            title="Switch User Role / Active Station"
           >
-            <div className="flex items-center space-x-2 min-w-0">
-              {isAdmin ? (
-                <ShieldCheck className="w-4 h-4 text-amber-500 shrink-0" />
-              ) : (
-                <Store className="w-4 h-4 text-[#80C7F2] shrink-0" />
-              )}
+            <div className="flex items-center space-x-2.5 min-w-0">
+              <div className="p-1 rounded-lg bg-white/60 dark:bg-black/40 shrink-0">
+                <RoleIcon className={`w-4 h-4 ${currentRoleConfig.iconColor}`} />
+              </div>
               {(!isCollapsed || isMobileOpen) && (
                 <div className="text-left min-w-0">
-                  <span className="font-extrabold block truncate leading-tight">
-                    {isAdmin ? 'HQ Administrator' : currentBranch?.name?.replace('Marsh Bites ', '') || currentUser.name}
-                  </span>
-                  <span className="text-[10px] text-neutral-500 dark:text-neutral-400 block truncate">
-                    {currentUser.name}
+                  <div className="flex items-center space-x-1.5">
+                    <span className="font-extrabold truncate leading-tight">
+                      {isSuper
+                        ? 'HQ Super Admin'
+                        : isManager
+                        ? 'Branch Manager'
+                        : 'Branch Staff'}
+                    </span>
+                    <span
+                      className={`text-[9px] font-bold px-1 rounded font-mono ${currentRoleConfig.badge}`}
+                    >
+                      {currentRoleConfig.label}
+                    </span>
+                  </div>
+                  <span className="text-[10px] text-neutral-500 dark:text-neutral-400 block truncate mt-0.5">
+                    {currentUser.name} • {isSuper ? 'Naga HQ' : currentBranch?.name?.replace('Marsh Bites - ', '') || 'Legazpi'}
                   </span>
                 </div>
               )}
             </div>
-            {(!isCollapsed || isMobileOpen) && <ChevronDown className="w-3.5 h-3.5 opacity-60 shrink-0 ml-1" />}
+            {(!isCollapsed || isMobileOpen) && (
+              <ChevronDown className="w-3.5 h-3.5 opacity-60 shrink-0 ml-1" />
+            )}
           </button>
 
           {/* User Switcher Dropdown */}
           {showUserMenu && (
             <>
               <div className="fixed inset-0 z-50" onClick={() => setShowUserMenu(false)} />
-              <div className="absolute left-0 right-0 top-full mt-1.5 max-h-72 overflow-y-auto rounded-2xl shadow-2xl border z-50 p-2 text-xs bg-white dark:bg-[#1c1c1c] border-neutral-200 dark:border-neutral-700 text-neutral-900 dark:text-white">
+              <div className="absolute left-0 right-0 top-full mt-1.5 max-h-80 overflow-y-auto rounded-2xl shadow-2xl border z-50 p-2 text-xs bg-white dark:bg-[#1c1c1c] border-neutral-200 dark:border-neutral-700 text-neutral-900 dark:text-white">
                 <div className="px-2 py-1.5 border-b border-neutral-200 dark:border-neutral-800">
                   <p className="text-[10px] font-bold uppercase tracking-wider text-neutral-400">
-                    Switch Active Account / Station
+                    Switch 3-Tier RBAC Station
                   </p>
                 </div>
-                <div className="py-1 space-y-0.5">
+                <div className="py-1 space-y-1">
                   {users.map((u) => {
                     const isSelected = u.id === currentUser.id;
+                    const uConfig = getRoleBadgeStyle(u);
+                    const UIcon = uConfig.icon;
                     return (
                       <button
                         key={u.id}
@@ -271,13 +341,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
                             : 'hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-700 dark:text-neutral-200'
                         }`}
                       >
-                        <div className="flex items-center space-x-2 truncate">
-                          {u.role === 'admin' ? (
-                            <ShieldCheck className="w-3.5 h-3.5 text-amber-500 shrink-0" />
-                          ) : (
-                            <MapPin className="w-3.5 h-3.5 text-[#80C7F2] shrink-0" />
-                          )}
-                          <span className="truncate">{u.name}</span>
+                        <div className="flex items-center space-x-2.5 truncate min-w-0">
+                          <UIcon className={`w-3.5 h-3.5 ${uConfig.iconColor} shrink-0`} />
+                          <div className="min-w-0 truncate">
+                            <div className="flex items-center space-x-1.5">
+                              <span className="truncate font-semibold">{u.name}</span>
+                              <span
+                                className={`text-[9px] px-1 py-0.2 rounded font-mono font-bold ${uConfig.badge}`}
+                              >
+                                {uConfig.label}
+                              </span>
+                            </div>
+                            <div className="text-[10px] text-neutral-400 truncate">
+                              {u.branchName || 'Headquarters'}
+                            </div>
+                          </div>
                         </div>
                         {isSelected && <UserCheck className="w-3.5 h-3.5 text-[#80C7F2] shrink-0" />}
                       </button>
@@ -294,10 +372,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <div className="flex-1 overflow-y-auto px-3 py-2 space-y-1 scrollbar-thin">
         {(!isCollapsed || isMobileOpen) && (
           <p className="text-[10px] font-bold uppercase tracking-wider text-neutral-400 px-3 py-1.5">
-            {isAdmin ? 'Commissary Operations' : 'Branch Storefront'}
+            {isStaff
+              ? 'Frontline Ground Operations'
+              : isManager
+              ? 'Store Leadership & Audit'
+              : 'HQ Executive Operations'}
           </p>
         )}
 
+        {/* Primary Role Tabs */}
         {tabs.map((tab) => {
           const Icon = tab.icon;
           const isActive = activeTab === tab.id;
@@ -336,6 +419,54 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </button>
           );
         })}
+
+        {/* Super Admin Secondary Operations Group */}
+        {isSuper && (
+          <div className="pt-3 mt-3 border-t border-neutral-200/60 dark:border-neutral-800">
+            {(!isCollapsed || isMobileOpen) && (
+              <p className="text-[10px] font-bold uppercase tracking-wider text-neutral-400 px-3 py-1.5">
+                Central Commissary Network
+              </p>
+            )}
+            {adminSecondaryTabs.map((tab) => {
+              const Icon = tab.icon;
+              const isActive = activeTab === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  id={`nav-tab-${tab.id}`}
+                  onClick={() => handleTabClick(tab.id)}
+                  className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-semibold transition-all group ${
+                    isActive
+                      ? 'bg-[#80C7F2] text-neutral-950 font-bold shadow-xs'
+                      : 'text-neutral-500 dark:text-neutral-400 hover:text-neutral-950 dark:hover:text-white hover:bg-neutral-100 dark:hover:bg-neutral-800/80'
+                  }`}
+                  title={tab.label}
+                >
+                  <div className="flex items-center space-x-3 min-w-0">
+                    <Icon
+                      className={`w-4 h-4 shrink-0 transition-transform group-hover:scale-110 ${
+                        isActive ? 'text-neutral-950' : 'text-neutral-400'
+                      }`}
+                    />
+                    {(!isCollapsed || isMobileOpen) && (
+                      <span className="truncate text-left">{tab.label}</span>
+                    )}
+                  </div>
+                  {tab.badge !== undefined && (!isCollapsed || isMobileOpen) && (
+                    <span
+                      className={`px-2 py-0.5 text-[10px] font-black rounded-full leading-none shrink-0 ${
+                        tab.badgeColor || 'bg-red-500 text-white'
+                      }`}
+                    >
+                      {tab.badge}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* Bottom Controls / Utilities Section */}

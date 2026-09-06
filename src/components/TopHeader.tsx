@@ -33,10 +33,13 @@ import {
   ExternalLink,
   Globe,
   Users,
+  Tag,
+  ArrowLeftRight,
 } from 'lucide-react';
 import { filterNotificationsForUser } from '../utils/notificationUtils';
 import { NotificationBadgeGroup } from './common/NotificationBadgeGroup';
 import { NotificationKind } from '../types';
+import { isSuperAdmin, isBranchManager, isBranchStaff } from '../utils/securityValidator';
 
 interface TopHeaderProps {
   activeTab: string;
@@ -105,6 +108,67 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
 
   // Tab metadata titles and icons
   const tabTitles: Record<string, { title: string; subtitle: string; icon: any }> = {
+    // 3-Tier RBAC Specific Tabs
+    physical_counts: {
+      title: 'Daily Physical Shelf Counts',
+      subtitle: 'Frontline beginning & end-of-shift count reconciliation',
+      icon: ClipboardCheck,
+    },
+    manual_sales: {
+      title: 'Manual Sales Entry',
+      subtitle: 'Log daily units sold per product/SKU at shift close',
+      icon: Receipt,
+    },
+    spoilage_wastage: {
+      title: 'Spoilage & Wastage Log',
+      subtitle: 'Log damaged, dropped, expired, or spoiled items with fail reasons',
+      icon: Trash2,
+    },
+    inbound_receiving: {
+      title: 'Inbound Receiving Inspection',
+      subtitle: 'Inspect physical stock from HQ, count items, and record variance',
+      icon: PackageCheck,
+    },
+    log_validation: {
+      title: 'Daily Log Validation & Audit',
+      subtitle: 'Audit staff physical counts, sales, wastage and lock daily records',
+      icon: ShieldCheck,
+    },
+    requisitions: {
+      title: 'Stock Requisition & Payment',
+      subtitle: 'Generate commissary requisitions and upload BIR payment slips',
+      icon: ShoppingBag,
+    },
+    branch_analytics: {
+      title: 'Branch Sales & Inventory Analytics',
+      subtitle: 'Track shrinkage, variance rates, and top moving flavors',
+      icon: TrendingUp,
+    },
+    transfers: {
+      title: 'Inter-Branch Stock Transfers',
+      subtitle: 'Transfer items between branches with destination approval',
+      icon: ArrowLeftRight,
+    },
+    requisition_approval: {
+      title: 'Requisition & Payment Approval',
+      subtitle: 'Verify proof of payment and dispatch branch commissary orders',
+      icon: ShoppingBag,
+    },
+    network_analytics: {
+      title: 'Network Predictive Analytics',
+      subtitle: '19-Branch predictive demand forecasts & replenishment KPIs',
+      icon: TrendingUp,
+    },
+    user_management: {
+      title: 'System Administration & RBAC',
+      subtitle: 'Manage 3-tier user credentials, branch assignments, and roles',
+      icon: Users,
+    },
+    master_pricing: {
+      title: 'Master Inventory & Pricing',
+      subtitle: 'Manage global SKU catalog, commissary wholesale rates, and SRP',
+      icon: Tag,
+    },
     dashboard: {
       title: isAdmin ? 'Central Executive Overview' : 'Branch Overview',
       subtitle: isAdmin
@@ -267,19 +331,27 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
                 id="top-user-switcher-btn"
                 onClick={() => setShowUserMenu(!showUserMenu)}
                 className={`flex items-center space-x-1.5 px-2.5 py-1.5 rounded-xl border text-xs font-semibold transition-all shadow-xs ${
-                  isAdmin
+                  isSuperAdmin(currentUser)
                     ? 'bg-amber-500/10 border-amber-500/30 text-amber-700 dark:text-amber-300 hover:bg-amber-500/20'
-                    : 'bg-[#80C7F2]/10 border-[#80C7F2]/30 text-[#1a7bb5] dark:text-[#80C7F2] hover:bg-[#80C7F2]/20'
+                    : isBranchManager(currentUser)
+                    ? 'bg-[#80C7F2]/10 border-[#80C7F2]/30 text-[#1a7bb5] dark:text-[#80C7F2] hover:bg-[#80C7F2]/20'
+                    : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-500/20'
                 }`}
                 title="Switch Station / User Role"
               >
-                {isAdmin ? (
+                {isSuperAdmin(currentUser) ? (
                   <ShieldCheck className="w-3.5 h-3.5 text-amber-500 shrink-0" />
-                ) : (
+                ) : isBranchManager(currentUser) ? (
                   <Store className="w-3.5 h-3.5 text-[#80C7F2] shrink-0" />
+                ) : (
+                  <ClipboardCheck className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
                 )}
-                <span className="hidden sm:inline truncate max-w-[110px]">
-                  {isAdmin ? 'HQ Admin' : currentBranch?.name?.replace('Marsh Bites ', '') || currentUser.name}
+                <span className="hidden sm:inline truncate max-w-[130px]">
+                  {isSuperAdmin(currentUser)
+                    ? 'HQ Super Admin'
+                    : isBranchManager(currentUser)
+                    ? `${currentBranch?.name?.replace('Marsh Bites - ', '') || 'Branch'} Lead`
+                    : `${currentBranch?.name?.replace('Marsh Bites - ', '') || 'Branch'} Staff`}
                 </span>
                 <ChevronDown className="w-3 h-3 opacity-60 shrink-0" />
               </button>
@@ -287,15 +359,17 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
               {showUserMenu && (
                 <>
                   <div className="fixed inset-0 z-40" onClick={() => setShowUserMenu(false)} />
-                  <div className="absolute right-0 mt-2 w-64 max-h-80 overflow-y-auto rounded-2xl shadow-2xl border z-50 p-2 text-xs bg-white dark:bg-[#1c1c1c] border-neutral-200 dark:border-neutral-700 text-neutral-900 dark:text-white">
+                  <div className="absolute right-0 mt-2 w-72 max-h-80 overflow-y-auto rounded-2xl shadow-2xl border z-50 p-2 text-xs bg-white dark:bg-[#1c1c1c] border-neutral-200 dark:border-neutral-700 text-neutral-900 dark:text-white">
                     <div className="px-2.5 py-1.5 border-b border-neutral-200 dark:border-neutral-800">
                       <p className="text-[10px] font-bold uppercase tracking-wider text-neutral-400">
-                        Switch Station / Account
+                        Switch 3-Tier RBAC Station
                       </p>
                     </div>
-                    <div className="py-1 space-y-0.5">
+                    <div className="py-1 space-y-1">
                       {users.map((u) => {
                         const isSelected = u.id === currentUser.id;
+                        const isSuperU = isSuperAdmin(u);
+                        const isManagerU = isBranchManager(u);
                         return (
                           <button
                             key={u.id}
@@ -309,15 +383,35 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
                                 : 'hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-700 dark:text-neutral-200'
                             }`}
                           >
-                            <div className="flex items-center space-x-2 truncate">
-                              {u.role === 'admin' ? (
+                            <div className="flex items-center space-x-2 truncate min-w-0">
+                              {isSuperU ? (
                                 <ShieldCheck className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                              ) : isManagerU ? (
+                                <Store className="w-3.5 h-3.5 text-[#80C7F2] shrink-0" />
                               ) : (
-                                <MapPin className="w-3.5 h-3.5 text-[#80C7F2] shrink-0" />
+                                <ClipboardCheck className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
                               )}
-                              <span className="truncate">{u.name}</span>
+                              <div className="truncate min-w-0">
+                                <div className="flex items-center space-x-1.5">
+                                  <span className="truncate font-semibold">{u.name}</span>
+                                  <span
+                                    className={`text-[9px] px-1 rounded font-mono ${
+                                      isSuperU
+                                        ? 'bg-amber-500/20 text-amber-700 dark:text-amber-300'
+                                        : isManagerU
+                                        ? 'bg-sky-500/20 text-sky-700 dark:text-sky-300'
+                                        : 'bg-emerald-500/20 text-emerald-700 dark:text-emerald-300'
+                                    }`}
+                                  >
+                                    {isSuperU ? 'SUPER' : isManagerU ? 'MANAGER' : 'STAFF'}
+                                  </span>
+                                </div>
+                                <div className="text-[10px] text-neutral-400 truncate">
+                                  {u.branchName || 'Headquarters'}
+                                </div>
+                              </div>
                             </div>
-                            {isSelected && <UserCheck className="w-3.5 h-3.5 text-[#80C7F2]" />}
+                            {isSelected && <UserCheck className="w-3.5 h-3.5 text-[#80C7F2] shrink-0 ml-1" />}
                           </button>
                         );
                       })}
