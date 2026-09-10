@@ -7,23 +7,26 @@ import {
   Clock,
   Lock,
   Save,
-  Send,
   Sparkles,
   Info,
   Package,
   Layers,
   FileCheck,
+  ArrowRight,
 } from 'lucide-react';
 import { DailyLogStatus, DailyPhysicalCountItem } from '../../types';
 
-export const StaffPhysicalCounts: React.FC = () => {
+interface StaffPhysicalCountsProps {
+  onNavigateTab?: (tab: string) => void;
+}
+
+export const StaffPhysicalCounts: React.FC<StaffPhysicalCountsProps> = ({ onNavigateTab }) => {
   const {
     currentUser,
     currentBranch,
     products,
     dailyShiftLogs,
     addPhysicalCountsToDailyLog,
-    submitDailyLogForValidation,
     themeMode,
   } = useData();
 
@@ -39,15 +42,18 @@ export const StaffPhysicalCounts: React.FC = () => {
   const currentStatus = todayLog?.status || DailyLogStatus.DRAFT;
   const isLocked = currentStatus === DailyLogStatus.VALIDATED_AND_LOCKED;
   const isPending = currentStatus === DailyLogStatus.PENDING_VALIDATION;
+  const isReturned = currentStatus === DailyLogStatus.RETURNED_FOR_REVISION;
   const isEditable = !isLocked && !isPending;
 
-  // Initialize count state
+  // Initialize count state (Purely Gourmet Marshmallow inventory)
   const [counts, setCounts] = useState<DailyPhysicalCountItem[]>(() => {
     if (todayLog && todayLog.physicalCounts && todayLog.physicalCounts.length > 0) {
-      return todayLog.physicalCounts;
+      return todayLog.physicalCounts.filter(
+        (c) => !c.productId.startsWith('f') && !c.productId.startsWith('pkg')
+      );
     }
 
-    // Default template for Legazpi City frontline staff
+    // Default template for Legazpi City frontline staff - 7 signature gourmet marshmallow flavors
     return [
       {
         productId: 'p1',
@@ -126,62 +132,20 @@ export const StaffPhysicalCounts: React.FC = () => {
         variance: 0,
         notes: '',
       },
-      // Flavorings
-      {
-        productId: 'f1',
-        productName: 'Pure Vanilla Extract (500ml)',
-        flavor: 'Extract / Essence',
-        category: 'flavorings',
-        beginningCount: 6,
-        endingCount: 5,
-        unit: 'bottles',
-        variance: 0,
-        notes: 'In-store dip sample replenishment',
-      },
-      {
-        productId: 'f2',
-        productName: 'Dauphin Cocoa Powder (1kg)',
-        flavor: 'Cocoa Base',
-        category: 'flavorings',
-        beginningCount: 4,
-        endingCount: 4,
-        unit: 'tubs',
-        variance: 0,
-        notes: 'Storage container sealed',
-      },
-      // Packaging
-      {
-        productId: 'pkg1',
-        productName: 'Vertex Kraft Bite Pouches (100s)',
-        flavor: 'Packaging Material',
-        category: 'packaging',
-        beginningCount: 8,
-        endingCount: 7,
-        unit: 'bundles',
-        variance: 0,
-        notes: 'Counter pack bundle opened',
-      },
-      {
-        productId: 'pkg2',
-        productName: 'Gift Presentation Boxes (50s)',
-        flavor: 'Packaging Material',
-        category: 'packaging',
-        beginningCount: 5,
-        endingCount: 4,
-        unit: 'bundles',
-        variance: 0,
-        notes: 'Gift sets assembled',
-      },
     ];
   });
 
-  const [activeCategory, setActiveCategory] = useState<'all' | 'marshmallows' | 'flavorings' | 'packaging'>('all');
+  const [searchTerm, setSearchTerm] = useState<string>('');
   const [feedback, setFeedback] = useState<{ text: string; type: 'success' | 'info' | 'error' } | null>(null);
+  const [lastSavedTime, setLastSavedTime] = useState<string | null>(null);
 
   const filteredItems = useMemo(() => {
-    if (activeCategory === 'all') return counts;
-    return counts.filter((i) => i.category === activeCategory);
-  }, [counts, activeCategory]);
+    if (!searchTerm.trim()) return counts;
+    return counts.filter((i) =>
+      i.flavor.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      i.productName.toLowerCase().includes(searchTerm.toLowerCase())
+    );
+  }, [counts, searchTerm]);
 
   const handleEndingCountChange = (productId: string, val: number) => {
     if (!isEditable) return;
@@ -210,26 +174,15 @@ export const StaffPhysicalCounts: React.FC = () => {
   const handleSaveDraft = () => {
     const res = addPhysicalCountsToDailyLog(counts);
     if (res.success) {
-      setFeedback({ text: 'Draft counts saved locally.', type: 'success' });
-      setTimeout(() => setFeedback(null), 4000);
-    } else {
-      setFeedback({ text: res.error || 'Failed to save draft.', type: 'error' });
-    }
-  };
-
-  const handleSubmitForApproval = () => {
-    // First ensure latest counts are saved
-    addPhysicalCountsToDailyLog(counts);
-    const logId = todayLog?.id || `log-${branchId}-${today}`;
-    const res = submitDailyLogForValidation(logId);
-    if (res.success) {
+      const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      setLastSavedTime(timeStr);
       setFeedback({
-        text: 'Daily Shift Log submitted to Branch Manager for validation & audit lock.',
+        text: `Physical counts entry saved to Shift Draft at ${timeStr}. Submit all shift logs from Shift Summary.`,
         type: 'success',
       });
       setTimeout(() => setFeedback(null), 5000);
     } else {
-      setFeedback({ text: res.error || 'Submission failed.', type: 'error' });
+      setFeedback({ text: res.error || 'Failed to save physical counts.', type: 'error' });
     }
   };
 
@@ -267,6 +220,12 @@ export const StaffPhysicalCounts: React.FC = () => {
               <span>Status: PENDING VALIDATION</span>
             </span>
           )}
+          {isReturned && (
+            <span className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-full text-xs font-bold bg-rose-100 text-rose-800 dark:bg-rose-950/60 dark:text-rose-300 border border-rose-300 dark:border-rose-700/60 animate-pulse">
+              <AlertTriangle className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400" />
+              <span>Status: RETURNED FOR REVISION</span>
+            </span>
+          )}
           {currentStatus === DailyLogStatus.VALIDATED_AND_LOCKED && (
             <span className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700/60">
               <Lock className="w-3.5 h-3.5" />
@@ -276,12 +235,39 @@ export const StaffPhysicalCounts: React.FC = () => {
         </div>
       </div>
 
+      {/* Return for Revision Alert Banner */}
+      {isReturned && (
+        <div className="p-4 rounded-2xl border bg-rose-50 dark:bg-rose-950/40 border-rose-200 dark:border-rose-800/60 shadow-xs">
+          <div className="flex items-start space-x-3">
+            <AlertTriangle className="w-5 h-5 text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" />
+            <div className="text-xs sm:text-sm">
+              <div className="font-bold text-rose-900 dark:text-rose-200 flex items-center gap-2">
+                <span>Shift Log Returned for Correction by {todayLog?.rejectedBy || 'Branch Manager'}</span>
+                {todayLog?.rejectedAt && (
+                  <span className="text-[11px] font-normal text-rose-600 dark:text-rose-300">
+                    ({new Date(todayLog.rejectedAt).toLocaleTimeString()})
+                  </span>
+                )}
+              </div>
+              <p className="mt-1 text-rose-800 dark:text-rose-300">
+                <span className="font-semibold">Reason / Note:</span> {todayLog?.rejectionReason || todayLog?.managerNotes || 'Discrepancy found. Please recount shelf tallies and resubmit.'}
+              </p>
+              <div className="mt-2 text-xs text-rose-700 dark:text-rose-400 font-medium">
+                👉 Please adjust the ending physical tallies or clarify notes below, then click <strong>&quot;Re-Submit Corrected Log&quot;</strong>.
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Role Boundary Notice */}
       <div className={`p-4 rounded-2xl border ${
         isLocked
           ? 'bg-neutral-100 dark:bg-neutral-900/60 border-neutral-200 dark:border-neutral-800'
           : isPending
           ? 'bg-sky-50 dark:bg-sky-950/30 border-sky-200 dark:border-sky-800/50'
+          : isReturned
+          ? 'bg-amber-50/70 dark:bg-amber-950/20 border-amber-200 dark:border-amber-800/40'
           : 'bg-amber-50 dark:bg-amber-950/30 border-amber-200 dark:border-amber-800/50'
       }`}>
         <div className="flex items-start space-x-3">
@@ -290,7 +276,7 @@ export const StaffPhysicalCounts: React.FC = () => {
             <span className="font-bold text-neutral-900 dark:text-white">
               BRANCH_STAFF Scope:
             </span>{' '}
-            Count physical boxes, jars, and packaging on the shelves. Requisition creation and pricing edits are strictly restricted for frontline ground staff.
+            Count physical Gourmet Marshmallow shelf inventory packs. Requisition creation and pricing edits are strictly restricted for frontline ground staff.
             {isLocked && (
               <span className="block mt-1 font-semibold text-emerald-700 dark:text-emerald-400">
                 🔒 Shift closed and locked by Manager on {todayLog?.validatedAt ? new Date(todayLog.validatedAt).toLocaleTimeString() : 'record'}.
@@ -316,52 +302,26 @@ export const StaffPhysicalCounts: React.FC = () => {
         </div>
       )}
 
-      {/* Category Tabs */}
-      <div className="flex items-center space-x-2 border-b border-neutral-200 dark:border-neutral-800 pb-2">
-        <button
-          type="button"
-          onClick={() => setActiveCategory('all')}
-          className={`px-3 py-1.5 text-xs font-bold rounded-xl transition-all cursor-pointer ${
-            activeCategory === 'all'
-              ? 'bg-neutral-900 text-white dark:bg-white dark:text-neutral-900 shadow-xs'
-              : 'text-neutral-500 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-white'
-          }`}
-        >
-          All Items ({counts.length})
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveCategory('marshmallows')}
-          className={`px-3 py-1.5 text-xs font-bold rounded-xl transition-all cursor-pointer ${
-            activeCategory === 'marshmallows'
-              ? 'bg-neutral-900 text-white dark:bg-white dark:text-neutral-900 shadow-xs'
-              : 'text-neutral-500 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-white'
-          }`}
-        >
-          Gourmet Marshmallows (7)
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveCategory('flavorings')}
-          className={`px-3 py-1.5 text-xs font-bold rounded-xl transition-all cursor-pointer ${
-            activeCategory === 'flavorings'
-              ? 'bg-neutral-900 text-white dark:bg-white dark:text-neutral-900 shadow-xs'
-              : 'text-neutral-500 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-white'
-          }`}
-        >
-          Flavorings & Extracts
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveCategory('packaging')}
-          className={`px-3 py-1.5 text-xs font-bold rounded-xl transition-all cursor-pointer ${
-            activeCategory === 'packaging'
-              ? 'bg-neutral-900 text-white dark:bg-white dark:text-neutral-900 shadow-xs'
-              : 'text-neutral-500 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-white'
-          }`}
-        >
-          Packaging Materials
-        </button>
+      {/* Marshmallow Shelf Catalog Bar */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-1 border-b border-neutral-200 dark:border-neutral-800">
+        <div className="flex items-center space-x-2">
+          <span className="px-3 py-1 text-xs font-bold rounded-xl bg-neutral-900 text-white dark:bg-white dark:text-neutral-900">
+            Gourmet Marshmallows ({counts.length} Flavors)
+          </span>
+          <span className="text-xs text-neutral-400">
+            Shelf Pack Count Only
+          </span>
+        </div>
+
+        <div className="relative w-full sm:w-64">
+          <input
+            type="text"
+            placeholder="Search flavor..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="w-full pl-3 pr-3 py-1.5 text-xs rounded-xl bg-neutral-50 dark:bg-neutral-850 border border-neutral-200 dark:border-neutral-700 focus:outline-hidden focus:ring-2 focus:ring-[#80C7F2] text-neutral-900 dark:text-white"
+          />
+        </div>
       </div>
 
       {/* Inventory Count Table */}
@@ -369,12 +329,12 @@ export const StaffPhysicalCounts: React.FC = () => {
         <table className="w-full text-left border-collapse">
           <thead>
             <tr className="border-b border-neutral-200 dark:border-neutral-800 bg-neutral-50/70 dark:bg-neutral-850/50 text-[11px] font-bold uppercase tracking-wider text-neutral-500 dark:text-neutral-400">
-              <th className="py-3 px-4">Item & Flavor</th>
+              <th className="py-3 px-4">Gourmet Flavor</th>
               <th className="py-3 px-3">Category</th>
               <th className="py-3 px-3 text-center">Beginning Shift</th>
               <th className="py-3 px-4 text-center">Ending Physical Count</th>
               <th className="py-3 px-3 text-center">Variance</th>
-              <th className="py-3 px-4">Staff Notes</th>
+              <th className="py-3 px-4">Staff Recount Notes</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-neutral-200/70 dark:divide-neutral-800 text-xs sm:text-sm">
@@ -443,10 +403,39 @@ export const StaffPhysicalCounts: React.FC = () => {
         </table>
       </div>
 
+      {/* Shift Summary Navigation Notice (Submissions centralized in Shift Summary) */}
+      <div className="p-4 rounded-2xl bg-amber-50/70 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800/50 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+        <div className="flex items-start space-x-2.5">
+          <FileCheck className="w-4 h-4 text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
+          <div className="text-xs text-amber-900 dark:text-amber-200">
+            <span className="font-bold">Physical counts save directly into your Shift Draft.</span>
+            <p className="text-[11px] text-amber-700 dark:text-amber-400 mt-0.5">
+              Once you have finished counting and saving your ending inventory, head to the centralized Shift Summary tab to review variance and submit for Branch Manager approval.
+            </p>
+          </div>
+        </div>
+        {onNavigateTab && (
+          <button
+            type="button"
+            onClick={() => onNavigateTab('shift_summary')}
+            className="inline-flex items-center space-x-1.5 px-3.5 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold shadow-xs whitespace-nowrap transition-colors"
+          >
+            <span>Go to Shift Summary</span>
+            <ArrowRight className="w-3.5 h-3.5" />
+          </button>
+        )}
+      </div>
+
       {/* Action Footbar */}
       <div className="flex flex-col sm:flex-row items-center justify-between gap-4 p-4 rounded-2xl bg-white dark:bg-[#181818] border border-neutral-200 dark:border-neutral-800 shadow-xs">
         <div className="text-xs text-neutral-500 dark:text-neutral-400">
           Logged by: <span className="font-semibold text-neutral-900 dark:text-white">{currentUser?.name}</span> ({currentUser?.role})
+          {lastSavedTime && (
+            <span className="ml-2 inline-flex items-center space-x-1 text-emerald-600 dark:text-emerald-400 font-semibold">
+              <CheckCircle2 className="w-3 h-3" />
+              <span>Last saved at {lastSavedTime}</span>
+            </span>
+          )}
         </div>
 
         <div className="flex items-center space-x-3 w-full sm:w-auto">
@@ -454,28 +443,14 @@ export const StaffPhysicalCounts: React.FC = () => {
             type="button"
             onClick={handleSaveDraft}
             disabled={!isEditable}
-            className={`flex-1 sm:flex-none flex items-center justify-center space-x-2 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-bold border transition-all ${
-              isEditable
-                ? 'border-neutral-300 dark:border-neutral-700 bg-neutral-100 hover:bg-neutral-200 dark:bg-neutral-800 dark:hover:bg-neutral-700 text-neutral-800 dark:text-neutral-200 cursor-pointer'
-                : 'opacity-50 cursor-not-allowed border-neutral-200 dark:border-neutral-800'
-            }`}
-          >
-            <Save className="w-4 h-4" />
-            <span>Save Draft</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={handleSubmitForApproval}
-            disabled={!isEditable}
-            className={`flex-1 sm:flex-none flex items-center justify-center space-x-2 px-5 py-2.5 rounded-xl text-xs sm:text-sm font-bold text-white shadow-sm transition-all ${
+            className={`w-full sm:w-auto flex items-center justify-center space-x-2 px-5 py-2.5 rounded-xl text-xs sm:text-sm font-bold text-white shadow-sm transition-all ${
               isEditable
                 ? 'bg-amber-600 hover:bg-amber-700 active:scale-98 cursor-pointer'
                 : 'opacity-50 cursor-not-allowed bg-neutral-400 dark:bg-neutral-700'
             }`}
           >
-            <Send className="w-4 h-4" />
-            <span>Submit Log for Approval</span>
+            <Save className="w-4 h-4" />
+            <span>Save Physical Counts Entry</span>
           </button>
         </div>
       </div>

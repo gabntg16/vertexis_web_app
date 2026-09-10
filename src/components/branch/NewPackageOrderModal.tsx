@@ -3,6 +3,8 @@ import { useData } from '../../context/DataContext';
 import { Minus, Plus, X, AlertCircle } from 'lucide-react';
 import { Order } from '../../types';
 import { PackageCapacityWarningModal, PackageExceedWarningDetails } from './PackageCapacityWarningModal';
+import { usePackageUpgradeOptimization } from '../../hooks/usePackageUpgradeOptimization';
+import { PackageUpgradeCaution } from '../common/PackageUpgradeCaution';
 
 export interface PackageTier {
   id: 'silver' | 'gold' | 'platinum';
@@ -72,6 +74,7 @@ export const NewPackageOrderModal: React.FC<NewPackageOrderModalProps> = ({
   const [selectedTierId, setSelectedTierId] = useState<'silver' | 'gold' | 'platinum'>(initialTierId);
   const [quantities, setQuantities] = useState<Record<string, number>>({});
   const [exceedWarning, setExceedWarning] = useState<PackageExceedWarningDetails | null>(null);
+  const [isUpgradeCautionDismissed, setIsUpgradeCautionDismissed] = useState(false);
 
   // Reset when opening
   useEffect(() => {
@@ -79,16 +82,46 @@ export const NewPackageOrderModal: React.FC<NewPackageOrderModalProps> = ({
       setQuantities({});
       setSelectedTierId(initialTierId);
       setExceedWarning(null);
+      setIsUpgradeCautionDismissed(false);
     }
   }, [isOpen, initialTierId]);
-
-  if (!isOpen) return null;
 
   const totalPacks = Object.values(quantities).reduce((sum, q) => sum + (q || 0), 0);
   const currentTier = PACKAGE_TIERS.find((t) => t.id === selectedTierId) || PACKAGE_TIERS[1];
   const isBelowBase = totalPacks < currentTier.baseCapacity;
   const isCapReached = totalPacks >= currentTier.maxCap;
   const { totalPrice, isExceeded, excessPacks } = calculatePackagePrice(currentTier, totalPacks);
+
+  // Intelligent upgrade optimization calculation
+  const upgradeAnalysis = usePackageUpgradeOptimization(selectedTierId, quantities);
+
+  const handleUpgradeToNextTier = (nextTierId: 'silver' | 'gold' | 'platinum') => {
+    const nextTier = PACKAGE_TIERS.find((t) => t.id === nextTierId);
+    if (!nextTier) return;
+
+    setSelectedTierId(nextTierId);
+    setIsUpgradeCautionDismissed(false);
+
+    // If packs exceed next tier's base capacity, scale or reset excess items to fit cleanly
+    if (totalPacks > nextTier.baseCapacity) {
+      let remainingToKeep = nextTier.baseCapacity;
+      const adjusted: Record<string, number> = {};
+      for (const [pId, qty] of Object.entries(quantities)) {
+        if (remainingToKeep <= 0) {
+          adjusted[pId] = 0;
+        } else if (qty <= remainingToKeep) {
+          adjusted[pId] = qty;
+          remainingToKeep -= qty;
+        } else {
+          adjusted[pId] = remainingToKeep;
+          remainingToKeep = 0;
+        }
+      }
+      setQuantities(adjusted);
+    }
+  };
+
+  if (!isOpen) return null;
 
   const handleQuantityChange = (productId: string, delta: number) => {
     const product = products.find((p) => p.id === productId);
@@ -294,6 +327,17 @@ export const NewPackageOrderModal: React.FC<NewPackageOrderModalProps> = ({
                 </button>
               );
             })}
+          </div>
+
+          {/* Intelligent Package Upgrade Caution Banner */}
+          <div className="mt-3">
+            <PackageUpgradeCaution
+              analysis={upgradeAnalysis}
+              isDismissed={isUpgradeCautionDismissed}
+              onUpgrade={handleUpgradeToNextTier}
+              onDismiss={() => setIsUpgradeCautionDismissed(true)}
+              themeMode="light"
+            />
           </div>
         </div>
 

@@ -7,7 +7,6 @@ import {
   Clock,
   Printer,
   Search,
-  Filter,
   CheckCircle2,
   AlertTriangle,
   X,
@@ -17,27 +16,17 @@ import {
   Building,
   ArrowRight,
   ShieldCheck,
-  Zap,
   Calendar,
   Sparkles,
   ExternalLink,
-  ChevronRight,
-  RefreshCw,
-  Eye,
   Plus,
   Send,
   Boxes,
+  Copy,
+  Check,
 } from 'lucide-react';
-import {
-  jtExpressService,
-  JTCreateOrderRequest,
-  JTShippingLabelData,
-  mapJTStatusToVertexStatus,
-  isJTMockMode,
-  COMMISSARY_SENDER,
-  resolveDestinationHub,
-} from '../../services/jtExpress';
-import { JTShippingLabel } from '../common/JTShippingLabel';
+import { JT_EXPRESS_TRACKING_URL } from '../../services/jtExpress';
+import { JTShippingLabel, DispatchManifestData } from '../common/JTShippingLabel';
 import { JTTrackingModal } from '../common/JTTrackingModal';
 import { Delivery, Order, DispatchMethod } from '../../types';
 
@@ -45,6 +34,15 @@ interface ToastState {
   type: 'success' | 'error' | 'info';
   message: string;
 }
+
+const COMMON_COURIERS = [
+  'J&T Express',
+  'LBC Express',
+  'Transportify',
+  'Grab Express',
+  'Victory Liner Cargo',
+  'Other Courier',
+];
 
 export const AdminDispatch: React.FC = () => {
   const {
@@ -55,39 +53,37 @@ export const AdminDispatch: React.FC = () => {
     createDelivery,
     updateDeliveryStatus,
     cancelDelivery,
-    updateOrderProductionStage,
   } = useData();
 
   const isDark = themeMode === 'dark';
 
   // Navigation & Filter States
-  const [activeTab, setActiveTab] = useState<'all' | 'pending' | 'jt_active' | 'fleet'>('all');
+  const [activeTab, setActiveTab] = useState<'all' | 'pending' | 'inTransit' | 'delivered'>('all');
   const [searchQuery, setSearchQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [methodFilter, setMethodFilter] = useState<'all' | 'company_driver' | 'courier'>('all');
 
   // Modal States
   const [selectedOrderForDispatch, setSelectedOrderForDispatch] = useState<Order | null>(null);
   const [showDispatchModal, setShowDispatchModal] = useState(false);
   const [activeTrackingNumber, setActiveTrackingNumber] = useState<string | null>(null);
   const [activeTrackingOrder, setActiveTrackingOrder] = useState<{ id: string; branch: string } | null>(null);
-  const [activeLabelData, setActiveLabelData] = useState<JTShippingLabelData | null>(null);
+  const [activeManifestData, setActiveManifestData] = useState<DispatchManifestData | null>(null);
   const [cancelModalDelivery, setCancelModalDelivery] = useState<Delivery | null>(null);
   const [cancelReason, setCancelReason] = useState('Order rescheduled by branch manager');
 
   // Dispatch Form States
-  const [dispatchMethod, setDispatchMethod] = useState<DispatchMethod>('jt_express');
-  const [selectedBranchId, setSelectedBranchId] = useState('');
+  const [dispatchType, setDispatchType] = useState<'company_driver' | 'courier'>('company_driver');
+  const [courierName, setCourierName] = useState('J&T Express');
+  const [customCourierName, setCustomCourierName] = useState('');
+  const [trackingOrPlate, setTrackingOrPlate] = useState('');
+  const [estimatedDeliveryTime, setEstimatedDeliveryTime] = useState('');
   const [receiverName, setReceiverName] = useState('');
   const [receiverPhone, setReceiverPhone] = useState('');
   const [receiverAddress, setReceiverAddress] = useState('');
-  const [receiverCity, setReceiverCity] = useState('');
-  const [receiverProvince, setReceiverProvince] = useState('');
-  const [packageWeightKg, setPackageWeightKg] = useState<number>(3.5);
-  const [declaredValue, setDeclaredValue] = useState<number>(15000);
-  const [driverName, setDriverName] = useState('Mang Robert (Commissary Driver)');
-  const [vehiclePlateNo, setVehiclePlateNo] = useState('BCO-8821 (Naga Van)');
+  const [driverName, setDriverName] = useState('Mang Robert (Central Logistics)');
+  const [vehiclePlateNo, setVehiclePlateNo] = useState('BCO-8821 (Naga Van #1)');
   const [driverPhone, setDriverPhone] = useState('+63 917 884 2104');
-  const [deliveryNotes, setDeliveryNotes] = useState('Keep dry, perishable gourmet marshmallows.');
+  const [deliveryNotes, setDeliveryNotes] = useState('Perishable gourmet marshmallows. Keep below 28°C.');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Toast Notification
@@ -100,162 +96,143 @@ export const AdminDispatch: React.FC = () => {
     }, 4500);
   };
 
-  // Helper to prefill receiver details when branch is chosen
-  const handleBranchSelect = (branchId: string) => {
-    setSelectedBranchId(branchId);
-    const branch = branches.find((b) => b.id === branchId);
+  // Pre-fill receiver details when opening dispatch modal
+  const handleOpenDispatchForOrder = (order: Order) => {
+    setSelectedOrderForDispatch(order);
+    const branch = branches.find((b) => b.id === order.branchId);
+
     if (branch) {
       setReceiverName(branch.managerName || `${branch.name} Store Manager`);
       setReceiverPhone(branch.managerPhone || branch.contactNumber || '+63 917 555 0192');
-      setReceiverAddress(branch.address || branch.location || `${branch.name}, Main Commercial Strip`);
-      // Parse city/province if available
-      const locParts = (branch.address || branch.location || '').split(',');
-      if (locParts.length >= 2) {
-        setReceiverCity(locParts[locParts.length - 2]?.trim() || 'Metro Manila');
-        setReceiverProvince(locParts[locParts.length - 1]?.trim() || 'NCR');
-      } else {
-        setReceiverCity(branch.location || 'Metro Manila');
-        setReceiverProvince('Philippines');
-      }
+      setReceiverAddress(branch.address || branch.location || `${branch.name}, Commercial Center`);
+    } else {
+      setReceiverName(`${order.branchName} Manager`);
+      setReceiverPhone('+63 917 555 0192');
+      setReceiverAddress(`${order.branchName} Store Location`);
     }
-  };
 
-  // Open dispatch modal for an approved order
-  const handleOpenDispatchForOrder = (order: Order) => {
-    setSelectedOrderForDispatch(order);
-    setSelectedBranchId(order.branchId);
-    handleBranchSelect(order.branchId);
+    // Default ETD to 48 hours ahead formatted for datetime-local
+    const defaultETD = new Date(Date.now() + 48 * 3600 * 1000);
+    const tzOffset = defaultETD.getTimezoneOffset() * 60000;
+    const localISOTime = new Date(defaultETD.getTime() - tzOffset).toISOString().slice(0, 16);
+    setEstimatedDeliveryTime(order.estimatedDeliveryTime || localISOTime);
 
-    // Calculate pouch count & weight
-    const totalPacks = order.items.reduce((sum, it) => sum + it.quantity, 0);
-    const estWeight = Math.max(1.5, Math.round(totalPacks * 0.12 * 10) / 10);
-    setPackageWeightKg(estWeight);
-    setDeclaredValue(order.totalAmount || 12000);
+    // Default tracking or trip ticket
+    if (dispatchType === 'company_driver') {
+      setTrackingOrPlate(`TRIP-NGA-${order.id}`);
+    } else {
+      setTrackingOrPlate(order.trackingNumber || '');
+    }
+
     setShowDispatchModal(true);
   };
 
-  // Handle Dispatch Submission (Company Driver or J&T Express)
-  const handleExecuteDispatch = async (e: React.FormEvent) => {
+  // Execute Dispatch Submission
+  const handleExecuteDispatch = (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedOrderForDispatch) return;
 
-    if (dispatchMethod === 'jt_express') {
-      if (!receiverAddress || receiverAddress.trim().length < 5) {
-        showToast('error', 'Please enter a complete branch destination address.');
-        return;
-      }
-      if (!receiverPhone || receiverPhone.trim().length < 7) {
-        showToast('error', 'Branch contact phone number is required for J&T Express delivery.');
-        return;
-      }
+    const finalCourierName =
+      dispatchType === 'company_driver'
+        ? 'In-House Commissary Fleet'
+        : courierName === 'Other Courier' && customCourierName
+        ? customCourierName
+        : courierName;
+
+    const finalTrackingNumber =
+      trackingOrPlate.trim() ||
+      (dispatchType === 'company_driver'
+        ? `TRIP-NGA-${selectedOrderForDispatch.id}`
+        : `MB-TRACK-${Math.floor(100000 + Math.random() * 900000)}`);
+
+    if (dispatchType === 'courier' && !trackingOrPlate.trim()) {
+      showToast('error', 'Please enter the Courier Waybill / Tracking Number.');
+      return;
+    }
+
+    if (!estimatedDeliveryTime) {
+      showToast('error', 'Please select the Estimated Time of Delivery (ETD).');
+      return;
     }
 
     try {
       setIsSubmitting(true);
 
-      if (dispatchMethod === 'jt_express') {
-        // Build J&T Create Order Request
-        const jtRequest: JTCreateOrderRequest = {
-          orderId: selectedOrderForDispatch.id,
-          sender: COMMISSARY_SENDER,
-          receiver: {
-            name: receiverName || 'Branch Store Manager',
-            mobile: receiverPhone,
-            phone: receiverPhone,
-            address: receiverAddress,
-            city: receiverCity || 'Metro Manila',
-            province: receiverProvince || 'NCR',
-            branchCode: selectedOrderForDispatch.branchId,
-            branchName: selectedOrderForDispatch.branchName,
-          },
-          items: selectedOrderForDispatch.items.map((it) => ({
-            itemName: it.productName,
-            itemQuantity: it.quantity,
-            itemValue: it.unitPrice || 149,
-            itemWeight: 0.12,
-            englishName: 'Gourmet Marshmallows',
-          })),
-          packageType: 'EXPRESS',
-          serviceType: 'EZ',
-          weightKg: packageWeightKg,
-          declaredValue: declaredValue,
-          remark: deliveryNotes,
-          isFragile: true,
-          isPerishable: true,
-        };
+      const totalPacks = selectedOrderForDispatch.items.reduce((s, it) => s + it.quantity, 0);
+      const estWeightKg = Math.max(1.5, Math.round(totalPacks * 0.12 * 10) / 10);
 
-        // Call J&T Open Platform API
-        const jtResponse = await jtExpressService.createOrder(jtRequest);
-        if (!jtResponse.success || !jtResponse.data) {
-          throw new Error(jtResponse.message || 'J&T Gateway returned an unsuccessful response.');
+      const resolvedMethod: DispatchMethod =
+        dispatchType === 'company_driver'
+          ? 'company_driver'
+          : finalCourierName.toLowerCase().includes('j&t')
+          ? 'jt_express'
+          : 'third_party_courier';
+
+      // Create Delivery in DataContext
+      createDelivery(
+        selectedOrderForDispatch.id,
+        receiverAddress,
+        finalCourierName,
+        finalTrackingNumber,
+        estimatedDeliveryTime,
+        deliveryNotes,
+        {
+          dispatchMethod: resolvedMethod,
+          waybillNumber: finalTrackingNumber,
+          driverName: dispatchType === 'company_driver' ? driverName : undefined,
+          driverPhone: dispatchType === 'company_driver' ? driverPhone : undefined,
+          vehiclePlateNo: dispatchType === 'company_driver' ? vehiclePlateNo : undefined,
+          receiverContact: receiverName,
+          receiverPhone: receiverPhone,
+          weightKg: estWeightKg,
+          estimatedDeliveryTime: estimatedDeliveryTime,
+          dispatchedProducts: selectedOrderForDispatch.items,
         }
+      );
 
-        const billCode = jtResponse.data.billCode;
-        const sortingCode = jtResponse.data.sortingCode;
+      // Generate Printable Dispatch Manifest
+      const manifest: DispatchManifestData = {
+        dispatchRef: finalTrackingNumber,
+        orderId: selectedOrderForDispatch.id,
+        dispatchMethod: resolvedMethod,
+        courierName: finalCourierName,
+        trackingNumber: finalTrackingNumber,
+        waybillNumber: finalTrackingNumber,
+        driverName: dispatchType === 'company_driver' ? driverName : undefined,
+        driverPhone: dispatchType === 'company_driver' ? driverPhone : undefined,
+        vehiclePlateNo: dispatchType === 'company_driver' ? vehiclePlateNo : undefined,
+        estimatedDeliveryTime: estimatedDeliveryTime,
+        createdAt: new Date().toISOString(),
+        sender: {
+          companyName: 'The Marsh Bites Enterprise (Central Commissary)',
+          hubName: 'Naga Central Commissary Hub',
+          address: 'Zone 4, Concepcion Pequeña, Naga City, Camarines Sur (Bicol Hub)',
+          contactPerson: 'Commissary Logistics Officer',
+          phone: '+63 917 555 6274',
+        },
+        receiver: {
+          branchName: selectedOrderForDispatch.branchName,
+          managerName: receiverName || 'Store Manager',
+          phone: receiverPhone,
+          address: receiverAddress,
+        },
+        items: selectedOrderForDispatch.items.map((it) => ({
+          itemName: it.productName,
+          quantity: it.quantity,
+          unitValue: it.unitPrice,
+        })),
+        totalPacks: totalPacks,
+        declaredValue: selectedOrderForDispatch.totalAmount,
+        packageWeightKg: estWeightKg,
+        specialInstructions: deliveryNotes,
+      };
 
-        // Create Delivery entry in DataContext
-        const newDel = createDelivery(
-          selectedOrderForDispatch.id,
-          receiverAddress,
-          'J&T Express Philippines',
-          billCode,
-          new Date(Date.now() + 2 * 24 * 3600 * 1000).toISOString(),
-          deliveryNotes,
-          {
-            dispatchMethod: 'jt_express',
-            waybillNumber: billCode,
-            jtSortingCode: sortingCode,
-            receiverContact: receiverName,
-            receiverPhone: receiverPhone,
-            weightKg: packageWeightKg,
-          }
-        );
-
-        // Prepare Shipping Label for immediate print preview
-        const labelData = jtExpressService.prepareShippingLabel(
-          billCode,
-          selectedOrderForDispatch.id,
-          jtRequest.receiver,
-          jtRequest.items,
-          {
-            weightKg: packageWeightKg,
-            declaredValue,
-            serviceType: jtResponse.data.serviceType,
-          }
-        );
-
-        setShowDispatchModal(false);
-        setActiveLabelData(labelData);
-        showToast(
-          'success',
-          `J&T Express Waybill ${billCode} generated successfully! Hub Routing: ${sortingCode}`
-        );
-      } else {
-        // Company Driver Dispatch
-        const trackingRef = `MB-FLEET-${Date.now().toString().slice(-6)}`;
-        createDelivery(
-          selectedOrderForDispatch.id,
-          receiverAddress,
-          'Marsh Bites In-House Fleet',
-          trackingRef,
-          new Date(Date.now() + 1 * 24 * 3600 * 1000).toISOString(),
-          `${deliveryNotes} | Driver: ${driverName} (${vehiclePlateNo})`,
-          {
-            dispatchMethod: 'company_driver',
-            waybillNumber: trackingRef,
-            driverName,
-            vehiclePlateNo,
-            receiverContact: receiverName,
-            receiverPhone: receiverPhone,
-          }
-        );
-
-        setShowDispatchModal(false);
-        showToast(
-          'success',
-          `Order #${selectedOrderForDispatch.id} dispatched via In-House Fleet (${driverName})`
-        );
-      }
+      setShowDispatchModal(false);
+      setActiveManifestData(manifest);
+      showToast(
+        'success',
+        `Order #${selectedOrderForDispatch.id} successfully dispatched via ${finalCourierName}! Waybill/Ref: ${finalTrackingNumber}. Notice broadcast to ${selectedOrderForDispatch.branchName}.`
+      );
     } catch (err: any) {
       showToast('error', err.message || 'Failed to dispatch shipment.');
     } finally {
@@ -263,68 +240,62 @@ export const AdminDispatch: React.FC = () => {
     }
   };
 
-  // View J&T Label for existing delivery
-  const handleViewExistingLabel = (delivery: Delivery) => {
+  // View Manifest for existing delivery
+  const handleViewExistingManifest = (delivery: Delivery) => {
     const order = orders.find((o) => o.id === delivery.orderId);
     const branch = branches.find((b) => b.id === delivery.branchId);
 
     const items = order
       ? order.items.map((it) => ({
           itemName: it.productName,
-          itemQuantity: it.quantity,
-          itemValue: it.unitPrice || 149,
-          itemWeight: 0.12,
+          quantity: it.quantity,
+          unitValue: it.unitPrice,
         }))
-      : [{ itemName: 'Marshmallow Restock Cartons', itemQuantity: 1, itemValue: 12000, itemWeight: 3.5 }];
+      : [];
 
-    const labelData = jtExpressService.prepareShippingLabel(
-      delivery.waybillNumber || delivery.trackingNumber || 'JTPH8821094',
-      delivery.orderId,
-      {
-        name: delivery.receiverContact || branch?.managerName || 'Branch Manager',
-        mobile: delivery.receiverPhone || branch?.managerPhone || branch?.contactNumber || '+63 917 555 0192',
-        address: delivery.address || branch?.address || 'Branch Store',
-        city: branch?.location || 'Metro Manila',
-        province: 'NCR',
-        branchName: branch?.name || 'Marsh Bites Franchise',
+    const totalPacks = items.reduce((s, it) => s + it.quantity, 0);
+
+    const manifest: DispatchManifestData = {
+      dispatchRef: delivery.trackingNumber || delivery.waybillNumber || delivery.id,
+      orderId: delivery.orderId,
+      dispatchMethod: delivery.dispatchMethod || 'company_driver',
+      courierName: delivery.courierName,
+      trackingNumber: delivery.trackingNumber,
+      waybillNumber: delivery.waybillNumber,
+      driverName: delivery.driverName,
+      driverPhone: delivery.driverPhone,
+      vehiclePlateNo: delivery.vehiclePlateNo,
+      estimatedDeliveryTime: delivery.scheduledAt,
+      createdAt: delivery.scheduledAt || new Date().toISOString(),
+      sender: {
+        companyName: 'The Marsh Bites Enterprise (Central Commissary)',
+        hubName: 'Naga Central Commissary Hub',
+        address: 'Zone 4, Concepcion Pequeña, Naga City, Camarines Sur',
+        contactPerson: 'Commissary Logistics Officer',
+        phone: '+63 917 555 6274',
+      },
+      receiver: {
+        branchName: branch?.name || order?.branchName || 'Franchise Store',
+        managerName: delivery.receiverContact || branch?.managerName || 'Store Manager',
+        phone: delivery.receiverPhone || branch?.contactNumber || '',
+        address: delivery.address,
       },
       items,
-      {
-        weightKg: delivery.weightKg || 3.5,
-        declaredValue: order?.totalAmount || 15000,
-      }
-    );
+      totalPacks,
+      declaredValue: order?.totalAmount || 12000,
+      packageWeightKg: delivery.weightKg || 3.0,
+      specialInstructions: delivery.notes,
+    };
 
-    setActiveLabelData(labelData);
+    setActiveManifestData(manifest);
   };
 
-  // Open Real-Time J&T Tracking Modal
-  const handleOpenTracking = (delivery: Delivery) => {
-    const trackNo = delivery.waybillNumber || delivery.trackingNumber;
-    if (!trackNo) {
-      showToast('info', 'No tracking number found for this shipment.');
-      return;
-    }
-    const branch = branches.find((b) => b.id === delivery.branchId);
-    setActiveTrackingNumber(trackNo);
-    setActiveTrackingOrder({
-      id: delivery.orderId,
-      branch: branch?.name || 'Franchise Branch',
-    });
-  };
-
-  // Handle Cancellation of Shipment
-  const handleConfirmCancel = async () => {
+  // Cancel Delivery
+  const handleConfirmCancel = () => {
     if (!cancelModalDelivery) return;
     try {
-      if (cancelModalDelivery.dispatchMethod === 'jt_express' && cancelModalDelivery.trackingNumber) {
-        await jtExpressService.cancelOrder(cancelModalDelivery.trackingNumber, cancelReason);
-      }
       cancelDelivery(cancelModalDelivery.id, cancelReason);
-      showToast(
-        'info',
-        `Shipment ${cancelModalDelivery.trackingNumber || cancelModalDelivery.id} cancelled.`
-      );
+      showToast('info', `Shipment ${cancelModalDelivery.trackingNumber || cancelModalDelivery.id} canceled.`);
       setCancelModalDelivery(null);
     } catch (err: any) {
       showToast('error', err.message || 'Failed to cancel shipment.');
@@ -338,7 +309,6 @@ export const AdminDispatch: React.FC = () => {
 
   // Filtered Deliveries List
   const filteredDeliveries = deliveries.filter((del) => {
-    const order = orders.find((o) => o.id === del.orderId);
     const branch = branches.find((b) => b.id === del.branchId);
     const matchesSearch =
       del.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -348,35 +318,40 @@ export const AdminDispatch: React.FC = () => {
       (branch && branch.name.toLowerCase().includes(searchQuery.toLowerCase())) ||
       del.address.toLowerCase().includes(searchQuery.toLowerCase());
 
-    const matchesStatus = statusFilter === 'all' || del.status === statusFilter;
-
-    const isJT = del.dispatchMethod === 'jt_express' || (del.courierName && del.courierName.toLowerCase().includes('j&t'));
-    const matchesTab =
+    const matchesStatus =
       activeTab === 'all'
         ? true
-        : activeTab === 'jt_active'
-        ? isJT
-        : activeTab === 'fleet'
-        ? !isJT
+        : activeTab === 'pending'
+        ? del.status === 'pending'
+        : activeTab === 'inTransit'
+        ? del.status === 'inTransit'
+        : activeTab === 'delivered'
+        ? del.status === 'delivered'
         : true;
 
-    return matchesSearch && matchesStatus && matchesTab;
+    const isFleet = del.dispatchMethod === 'company_driver';
+    const matchesMethod =
+      methodFilter === 'all'
+        ? true
+        : methodFilter === 'company_driver'
+        ? isFleet
+        : !isFleet;
+
+    return matchesSearch && matchesStatus && matchesMethod;
   });
 
   // Calculate Metrics
-  const jtCount = deliveries.filter(
-    (d) => d.dispatchMethod === 'jt_express' || (d.courierName && d.courierName.toLowerCase().includes('j&t'))
-  ).length;
-  const fleetCount = deliveries.filter((d) => d.dispatchMethod === 'company_driver').length;
   const inTransitCount = deliveries.filter((d) => d.status === 'inTransit').length;
   const deliveredCount = deliveries.filter((d) => d.status === 'delivered').length;
+  const fleetCount = deliveries.filter((d) => d.dispatchMethod === 'company_driver').length;
+  const courierCount = deliveries.filter((d) => d.dispatchMethod !== 'company_driver').length;
 
   return (
     <div className="space-y-6">
       {/* Toast Notification Container */}
       {toast && (
         <div
-          className={`fixed top-5 right-5 z-80 max-w-md p-4 rounded-2xl shadow-2xl border flex items-center space-x-3 transition-all animate-bounce-short ${
+          className={`fixed top-5 right-5 z-80 max-w-md p-4 rounded-2xl shadow-2xl border flex items-center space-x-3 transition-all ${
             toast.type === 'success'
               ? 'bg-emerald-600 text-white border-emerald-500'
               : toast.type === 'error'
@@ -406,39 +381,33 @@ export const AdminDispatch: React.FC = () => {
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="space-y-1">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="px-2.5 py-0.5 rounded-full text-[11px] font-black bg-[#E30613] text-white flex items-center space-x-1">
-                <span>J&T EXPRESS</span>
-                <span className="font-light">OPEN PLATFORM</span>
+              <span className="px-2.5 py-0.5 rounded-full text-[11px] font-black bg-[#F37021] text-white flex items-center space-x-1">
+                <Truck className="w-3 h-3" />
+                <span>CENTRAL COMMISSARY DISPATCH</span>
               </span>
               <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-[#80C7F2]/20 text-[#1a7bb5] dark:text-[#80C7F2] border border-[#80C7F2]/30">
-                Naga Central Commissary Hub (BCO-NGA-01)
+                Naga City Hub (Camarines Sur)
               </span>
-              {isJTMockMode() && (
-                <span className="px-2 py-0.5 rounded-full text-[10px] font-mono bg-amber-500/20 text-amber-600 dark:text-amber-400 border border-amber-500/30">
-                  ⚡ Sandbox Mode Active
-                </span>
-              )}
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+                19+ Franchise Branches
+              </span>
             </div>
             <h1 className="text-2xl font-black tracking-tight text-neutral-900 dark:text-white">
-              Fleet & Courier Dispatch Center
+              Commissary Dispatch & Logistics Center
             </h1>
             <p className="text-xs text-neutral-500 max-w-2xl">
-              Automated J&T Express waybill generation, real-time cross-island package tracking, and in-house fleet dispatch across 19 franchise branches.
+              Dispatch approved franchise requisitions via In-House Logistics Fleet or Third-Party Couriers (J&T Express, LBC, Cargo). Generate official gate passes and notify branch managers in real time.
             </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            {pendingDispatchOrders.length > 0 && (
-              <button
-                onClick={() => {
-                  setActiveTab('pending');
-                }}
-                className="px-4 py-2.5 rounded-2xl bg-[#F37021] text-white text-xs font-bold hover:bg-[#d85e15] transition-all flex items-center space-x-2 shadow-sm animate-pulse"
-              >
-                <Boxes className="w-4 h-4" />
-                <span>{pendingDispatchOrders.length} Ready for Dispatch</span>
-              </button>
-            )}
+          <div className="flex items-center space-x-2">
+            <button
+              onClick={() => setActiveTab('pending')}
+              className="px-4 py-2.5 rounded-xl bg-[#F37021] hover:bg-[#d85e15] text-white text-xs font-bold transition-all shadow-md flex items-center space-x-1.5 cursor-pointer"
+            >
+              <Package className="w-4 h-4" />
+              <span>Pending Orders ({pendingDispatchOrders.length})</span>
+            </button>
           </div>
         </div>
       </div>
@@ -451,24 +420,11 @@ export const AdminDispatch: React.FC = () => {
           }`}
         >
           <div className="flex items-center justify-between text-neutral-400 mb-1">
-            <span className="text-xs font-bold uppercase tracking-wider">Total Dispatches</span>
-            <Truck className="w-4 h-4 text-[#80C7F2]" />
+            <span className="text-xs font-bold uppercase tracking-wider">Ready to Dispatch</span>
+            <Package className="w-4 h-4 text-amber-500" />
           </div>
-          <p className="text-2xl font-black text-neutral-900 dark:text-white">{deliveries.length}</p>
-          <p className="text-[11px] text-neutral-500 mt-0.5">All outbound routes</p>
-        </div>
-
-        <div
-          className={`p-4 rounded-2xl border ${
-            isDark ? 'bg-[#161616] border-neutral-800' : 'bg-white border-neutral-200 shadow-xs'
-          }`}
-        >
-          <div className="flex items-center justify-between text-neutral-400 mb-1">
-            <span className="text-xs font-bold uppercase tracking-wider">J&T Express</span>
-            <span className="font-black text-[10px] bg-red-600 text-white px-1.5 py-0.5 rounded">J&T</span>
-          </div>
-          <p className="text-2xl font-black text-red-600 dark:text-red-400">{jtCount}</p>
-          <p className="text-[11px] text-neutral-500 mt-0.5">Automated Air Waybills</p>
+          <p className="text-2xl font-black text-amber-500">{pendingDispatchOrders.length}</p>
+          <p className="text-[11px] text-neutral-500 mt-0.5">Approved requisitions</p>
         </div>
 
         <div
@@ -481,7 +437,7 @@ export const AdminDispatch: React.FC = () => {
             <Clock className="w-4 h-4 text-sky-500" />
           </div>
           <p className="text-2xl font-black text-sky-500">{inTransitCount}</p>
-          <p className="text-[11px] text-neutral-500 mt-0.5">Live en route parcels</p>
+          <p className="text-[11px] text-neutral-500 mt-0.5">En-route consignments</p>
         </div>
 
         <div
@@ -490,11 +446,26 @@ export const AdminDispatch: React.FC = () => {
           }`}
         >
           <div className="flex items-center justify-between text-neutral-400 mb-1">
-            <span className="text-xs font-bold uppercase tracking-wider">Ready for Dispatch</span>
-            <Package className="w-4 h-4 text-amber-500" />
+            <span className="text-xs font-bold uppercase tracking-wider">Delivered</span>
+            <CheckCircle2 className="w-4 h-4 text-emerald-500" />
           </div>
-          <p className="text-2xl font-black text-amber-500">{pendingDispatchOrders.length}</p>
-          <p className="text-[11px] text-neutral-500 mt-0.5">Approved requisitions</p>
+          <p className="text-2xl font-black text-emerald-500">{deliveredCount}</p>
+          <p className="text-[11px] text-neutral-500 mt-0.5">Completed receiving</p>
+        </div>
+
+        <div
+          className={`p-4 rounded-2xl border ${
+            isDark ? 'bg-[#161616] border-neutral-800' : 'bg-white border-neutral-200 shadow-xs'
+          }`}
+        >
+          <div className="flex items-center justify-between text-neutral-400 mb-1">
+            <span className="text-xs font-bold uppercase tracking-wider">Fleet vs Courier</span>
+            <Truck className="w-4 h-4 text-[#F37021]" />
+          </div>
+          <p className="text-2xl font-black text-neutral-900 dark:text-white">
+            {fleetCount} <span className="text-sm font-normal text-neutral-400">/ {courierCount}</span>
+          </p>
+          <p className="text-[11px] text-neutral-500 mt-0.5">In-House vs Couriers</p>
         </div>
       </div>
 
@@ -503,7 +474,7 @@ export const AdminDispatch: React.FC = () => {
         <div className="flex items-center space-x-2">
           <button
             onClick={() => setActiveTab('all')}
-            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
               activeTab === 'all'
                 ? 'bg-neutral-900 text-white dark:bg-white dark:text-neutral-900 shadow-xs'
                 : 'text-neutral-500 hover:text-neutral-900 dark:hover:text-white'
@@ -514,7 +485,7 @@ export const AdminDispatch: React.FC = () => {
 
           <button
             onClick={() => setActiveTab('pending')}
-            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all relative ${
+            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all relative cursor-pointer ${
               activeTab === 'pending'
                 ? 'bg-[#F37021] text-white shadow-xs'
                 : 'text-neutral-500 hover:text-neutral-900 dark:hover:text-white'
@@ -529,25 +500,25 @@ export const AdminDispatch: React.FC = () => {
           </button>
 
           <button
-            onClick={() => setActiveTab('jt_active')}
-            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
-              activeTab === 'jt_active'
-                ? 'bg-red-600 text-white shadow-xs'
+            onClick={() => setActiveTab('inTransit')}
+            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+              activeTab === 'inTransit'
+                ? 'bg-sky-600 text-white shadow-xs'
                 : 'text-neutral-500 hover:text-neutral-900 dark:hover:text-white'
             }`}
           >
-            J&T Express Waybills ({jtCount})
+            In Transit ({inTransitCount})
           </button>
 
           <button
-            onClick={() => setActiveTab('fleet')}
-            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
-              activeTab === 'fleet'
-                ? 'bg-[#80C7F2] text-neutral-900 shadow-xs'
+            onClick={() => setActiveTab('delivered')}
+            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+              activeTab === 'delivered'
+                ? 'bg-emerald-600 text-white shadow-xs'
                 : 'text-neutral-500 hover:text-neutral-900 dark:hover:text-white'
             }`}
           >
-            Company Fleet ({fleetCount})
+            Delivered ({deliveredCount})
           </button>
         </div>
 
@@ -559,7 +530,7 @@ export const AdminDispatch: React.FC = () => {
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search by Waybill, Branch, or Ref..."
+              placeholder="Search Waybill, Ref, Branch..."
               className={`w-full pl-9 pr-3 py-1.5 rounded-xl text-xs border focus:outline-none focus:ring-1 focus:ring-[#80C7F2] ${
                 isDark
                   ? 'bg-neutral-900 border-neutral-800 text-white placeholder-neutral-500'
@@ -569,24 +540,20 @@ export const AdminDispatch: React.FC = () => {
           </div>
 
           <select
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
-            className={`px-3 py-1.5 rounded-xl text-xs border font-medium focus:outline-none focus:ring-1 focus:ring-[#80C7F2] ${
-              isDark
-                ? 'bg-neutral-900 border-neutral-800 text-white'
-                : 'bg-white border-neutral-200 text-neutral-900'
+            value={methodFilter}
+            onChange={(e) => setMethodFilter(e.target.value as any)}
+            className={`px-3 py-1.5 rounded-xl text-xs border font-medium focus:outline-none ${
+              isDark ? 'bg-neutral-900 border-neutral-800 text-white' : 'bg-white border-neutral-200 text-neutral-900'
             }`}
           >
-            <option value="all">All Statuses</option>
-            <option value="pending">Pending Pickup</option>
-            <option value="inTransit">In Transit</option>
-            <option value="delivered">Delivered</option>
-            <option value="canceled">Canceled</option>
+            <option value="all">All Methods</option>
+            <option value="company_driver">In-House Fleet</option>
+            <option value="courier">Courier / Partner</option>
           </select>
         </div>
       </div>
 
-      {/* PENDING DISPATCH TAB VIEW */}
+      {/* READY FOR DISPATCH ORDERS SECTION */}
       {activeTab === 'pending' ? (
         <div className="space-y-4">
           <div className="flex items-center justify-between">
@@ -594,7 +561,7 @@ export const AdminDispatch: React.FC = () => {
               Approved Franchise Requisitions Awaiting Dispatch ({pendingDispatchOrders.length})
             </h3>
             <span className="text-xs text-neutral-400">
-              Kitchen packaging completed at Naga Commissary. Select dispatch method below.
+              Select an order to dispatch via In-House Fleet or Third-Party Courier.
             </span>
           </div>
 
@@ -607,14 +574,13 @@ export const AdminDispatch: React.FC = () => {
               <CheckCircle2 className="w-12 h-12 text-emerald-500 mx-auto mb-2 opacity-80" />
               <p className="text-sm font-bold">All Approved Orders Dispatched</p>
               <p className="text-xs text-neutral-400 mt-1">
-                There are no approved orders pending dispatch assignment at this time.
+                There are no approved orders pending dispatch at this time.
               </p>
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {pendingDispatchOrders.map((ord) => {
                 const totalPacks = ord.items.reduce((s, i) => s + i.quantity, 0);
-                const estWeight = Math.max(1.5, Math.round(totalPacks * 0.12 * 10) / 10);
                 const branch = branches.find((b) => b.id === ord.branchId);
 
                 return (
@@ -624,54 +590,62 @@ export const AdminDispatch: React.FC = () => {
                       isDark ? 'bg-[#161616] border-neutral-800' : 'bg-white border-neutral-200 shadow-xs'
                     }`}
                   >
-                    <div className="flex items-start justify-between">
+                    <div className="flex items-start justify-between gap-3">
                       <div>
                         <div className="flex items-center space-x-2">
-                          <span className="font-mono text-xs font-bold text-neutral-400">#{ord.id}</span>
-                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30">
+                          <span className="text-xs font-mono font-bold text-neutral-500">#{ord.id}</span>
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/25">
                             Ready for Dispatch
                           </span>
-                          {ord.batchCode && (
-                            <span className="font-mono text-[10px] text-neutral-500">
-                              Batch: {ord.batchCode}
-                            </span>
-                          )}
                         </div>
                         <h4 className="text-base font-black text-neutral-900 dark:text-white mt-1">
                           {ord.branchName}
                         </h4>
                         <p className="text-xs text-neutral-500 flex items-center space-x-1 mt-0.5">
-                          <MapPin className="w-3 h-3 text-[#F37021]" />
-                          <span>{branch?.location || branch?.address || 'Branch Destination'}</span>
+                          <MapPin className="w-3 h-3 text-[#F37021] shrink-0" />
+                          <span>{branch?.location || branch?.address || 'Branch Location'}</span>
                         </p>
                       </div>
 
                       <div className="text-right">
-                        <p className="text-xs text-neutral-400">Total Value</p>
-                        <p className="text-base font-black text-emerald-600 dark:text-emerald-400">
+                        <span className="text-base font-black text-emerald-600 dark:text-emerald-400 block">
                           ₱{ord.totalAmount.toLocaleString()}
+                        </span>
+                        <span className="text-[11px] font-bold text-neutral-400">
+                          {totalPacks} units (pouches)
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Itemized preview */}
+                    <div className="p-3 rounded-2xl bg-neutral-50 dark:bg-neutral-900/60 border border-neutral-100 dark:border-neutral-800 text-xs space-y-1">
+                      <div className="flex items-center justify-between text-neutral-400 text-[11px] font-bold uppercase mb-1">
+                        <span>Packaged Items</span>
+                        <span>Quantity</span>
+                      </div>
+                      {ord.items.slice(0, 3).map((it, idx) => (
+                        <div key={idx} className="flex items-center justify-between text-neutral-700 dark:text-neutral-300">
+                          <span className="truncate max-w-[200px]">{it.productName}</span>
+                          <span className="font-bold">{it.quantity} packs</span>
+                        </div>
+                      ))}
+                      {ord.items.length > 3 && (
+                        <p className="text-[10px] text-neutral-400 italic pt-1">
+                          +{ord.items.length - 3} more flavors/items
                         </p>
-                      </div>
+                      )}
                     </div>
 
-                    <div className="p-3 rounded-2xl bg-neutral-50 dark:bg-neutral-900/60 border border-neutral-200 dark:border-neutral-800 text-xs space-y-1.5">
-                      <p className="font-bold text-neutral-600 dark:text-neutral-300">Package Contents:</p>
-                      <p className="text-neutral-500 dark:text-neutral-400 line-clamp-2">
-                        {ord.items.map((i) => `${i.quantity}x ${i.productName}`).join(' • ')}
-                      </p>
-                      <div className="flex items-center justify-between text-[11px] text-neutral-400 pt-1 border-t border-neutral-200/60 dark:border-neutral-800">
-                        <span>Total: {totalPacks} Pouches</span>
-                        <span>Estimated Weight: ~{estWeight} kg</span>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center justify-end space-x-2 pt-1">
+                    <div className="flex items-center justify-between pt-2 border-t border-neutral-100 dark:border-neutral-800">
+                      <span className="text-[11px] text-neutral-400">
+                        Approved on: {new Date(ord.createdAt).toLocaleDateString()}
+                      </span>
                       <button
                         onClick={() => handleOpenDispatchForOrder(ord)}
-                        className="w-full py-2.5 rounded-xl bg-linear-to-r from-[#F37021] to-[#E30613] text-white text-xs font-black hover:opacity-95 transition-all flex items-center justify-center space-x-2 shadow-sm"
+                        className="px-4 py-2 rounded-xl bg-[#F37021] hover:bg-[#d85e15] text-white text-xs font-bold transition-all shadow-xs flex items-center space-x-1.5 cursor-pointer"
                       >
-                        <Send className="w-3.5 h-3.5" />
-                        <span>Dispatch Shipment (J&T / Fleet)</span>
+                        <Truck className="w-3.5 h-3.5" />
+                        <span>Dispatch Consignment</span>
                       </button>
                     </div>
                   </div>
@@ -681,66 +655,76 @@ export const AdminDispatch: React.FC = () => {
           )}
         </div>
       ) : (
-        /* ALL DELIVERIES / COURIER LIST VIEW */
-        <div className="space-y-3.5">
+        /* DELIVERIES LIST TABLE */
+        <div className="space-y-3">
           {filteredDeliveries.length === 0 ? (
             <div
               className={`p-12 text-center rounded-3xl border ${
                 isDark ? 'bg-[#161616] border-neutral-800' : 'bg-white border-neutral-200'
               }`}
             >
-              <Truck className="w-12 h-12 text-neutral-400 mx-auto mb-2 opacity-60" />
+              <Package className="w-12 h-12 text-neutral-400 mx-auto mb-2 opacity-50" />
               <p className="text-sm font-bold">No Shipments Found</p>
               <p className="text-xs text-neutral-400 mt-1">
-                No delivery records match your current filter criteria.
+                Try clearing search query or switching tabs.
               </p>
             </div>
           ) : (
             filteredDeliveries.map((del) => {
-              const order = orders.find((o) => o.id === del.orderId);
               const branch = branches.find((b) => b.id === del.branchId);
-              const isJT =
-                del.dispatchMethod === 'jt_express' ||
-                (del.courierName && del.courierName.toLowerCase().includes('j&t'));
-
-              const trackingNo = del.waybillNumber || del.trackingNumber;
+              const isFleet = del.dispatchMethod === 'company_driver';
+              const trackingNo = del.trackingNumber || del.waybillNumber || del.id;
+              const isJT = del.courierName?.toLowerCase().includes('j&t');
 
               return (
                 <div
                   key={del.id}
-                  className={`p-5 rounded-3xl border transition-all space-y-3.5 ${
+                  className={`p-4 sm:p-5 rounded-2xl border transition-all space-y-3 ${
                     isDark ? 'bg-[#161616] border-neutral-800' : 'bg-white border-neutral-200 shadow-xs'
                   }`}
                 >
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                     <div className="space-y-1">
                       <div className="flex flex-wrap items-center gap-2">
-                        {isJT ? (
-                          <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-red-600 text-white flex items-center space-x-1">
-                            <span>J&T EXPRESS</span>
+                        {isFleet ? (
+                          <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-[#F37021]/15 text-[#F37021] border border-[#F37021]/30 flex items-center space-x-1">
+                            <Truck className="w-3 h-3" />
+                            <span>IN-HOUSE FLEET</span>
                           </span>
                         ) : (
-                          <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-[#80C7F2]/20 text-[#1a7bb5] dark:text-[#80C7F2] border border-[#80C7F2]/30 flex items-center space-x-1">
-                            <Truck className="w-3 h-3" />
-                            <span>COMPANY FLEET</span>
+                          <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-sky-500/15 text-sky-600 dark:text-sky-400 border border-sky-500/30 flex items-center space-x-1">
+                            <Package className="w-3 h-3" />
+                            <span>{del.courierName.toUpperCase()}</span>
                           </span>
                         )}
 
-                        {trackingNo && (
-                          <span className="font-mono text-xs font-bold text-neutral-700 dark:text-neutral-300">
+                        <div className="flex items-center space-x-1">
+                          <span className="font-mono text-xs font-bold text-neutral-900 dark:text-white">
                             {trackingNo}
                           </span>
-                        )}
+                          {isJT && (
+                            <a
+                              href={JT_EXPRESS_TRACKING_URL}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-[10px] font-bold text-red-600 hover:underline flex items-center space-x-0.5 ml-1"
+                              title="Carrier Portal"
+                            >
+                              <span>Carrier Site</span>
+                              <ExternalLink className="w-2.5 h-2.5" />
+                            </a>
+                          )}
+                        </div>
 
                         <span
-                          className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
+                          className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase ${
                             del.status === 'delivered'
-                              ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
+                              ? 'bg-emerald-500/15 text-emerald-600'
                               : del.status === 'inTransit'
-                              ? 'bg-sky-500/15 text-sky-600 dark:text-sky-400'
+                              ? 'bg-sky-500/15 text-sky-600'
                               : del.status === 'canceled'
-                              ? 'bg-red-500/15 text-red-600 dark:text-red-400'
-                              : 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
+                              ? 'bg-red-500/15 text-red-600'
+                              : 'bg-amber-500/15 text-amber-600'
                           }`}
                         >
                           {del.status === 'inTransit'
@@ -749,16 +733,14 @@ export const AdminDispatch: React.FC = () => {
                             ? 'Delivered'
                             : del.status === 'canceled'
                             ? 'Canceled'
-                            : 'Pending Pickup'}
+                            : 'Pending'}
                         </span>
 
-                        <span className="text-xs text-neutral-400">
-                          Ref Order: #{del.orderId}
-                        </span>
+                        <span className="text-xs text-neutral-400">Order #{del.orderId}</span>
                       </div>
 
                       <h4 className="text-sm font-black text-neutral-900 dark:text-white">
-                        {branch?.name || 'Destination Branch'}
+                        {branch?.name || 'Destination Store'}
                       </h4>
 
                       <p className="text-xs text-neutral-500 flex items-center space-x-1">
@@ -767,46 +749,49 @@ export const AdminDispatch: React.FC = () => {
                       </p>
                     </div>
 
+                    {/* Action buttons */}
                     <div className="flex flex-wrap items-center gap-2 sm:justify-end">
-                      {/* Live J&T Real-Time Tracking Button */}
-                      {isJT && trackingNo && (
-                        <button
-                          onClick={() => handleOpenTracking(del)}
-                          className="px-3 py-1.5 rounded-xl bg-red-600/10 hover:bg-red-600/20 text-red-600 dark:text-red-400 border border-red-500/30 text-xs font-bold transition-all flex items-center space-x-1.5"
-                        >
-                          <Zap className="w-3.5 h-3.5" />
-                          <span>Track J&T Package</span>
-                        </button>
-                      )}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveTrackingNumber(trackingNo);
+                          setActiveTrackingOrder({ id: del.orderId, branch: branch?.name || 'Branch' });
+                        }}
+                        className="px-3 py-1.5 rounded-xl border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-800 text-xs font-bold transition-all flex items-center space-x-1.5 cursor-pointer"
+                      >
+                        <Clock className="w-3.5 h-3.5 text-sky-500" />
+                        <span>Details</span>
+                      </button>
 
-                      {/* Print Shipping Label */}
-                      {isJT && (
-                        <button
-                          onClick={() => handleViewExistingLabel(del)}
-                          className="px-3 py-1.5 rounded-xl bg-neutral-100 dark:bg-neutral-800 hover:bg-neutral-200 dark:hover:bg-neutral-700 text-neutral-700 dark:text-neutral-300 text-xs font-bold transition-all flex items-center space-x-1.5"
-                          title="Print 4x6 Thermal Waybill"
-                        >
-                          <Printer className="w-3.5 h-3.5" />
-                          <span>Waybill</span>
-                        </button>
-                      )}
+                      <button
+                        type="button"
+                        onClick={() => handleViewExistingManifest(del)}
+                        className="px-3 py-1.5 rounded-xl bg-neutral-900 text-white dark:bg-white dark:text-neutral-900 hover:opacity-90 text-xs font-bold transition-all flex items-center space-x-1.5 shadow-xs cursor-pointer"
+                        title="Print Gate Pass / Dispatch Slip"
+                      >
+                        <Printer className="w-3.5 h-3.5" />
+                        <span>Gate Pass</span>
+                      </button>
 
-                      {/* Quick Mark as Delivered toggle */}
                       {del.status === 'inTransit' && (
                         <button
-                          onClick={() => updateDeliveryStatus(del.id, 'delivered')}
-                          className="px-3 py-1.5 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 text-xs font-bold transition-all"
+                          type="button"
+                          onClick={() => {
+                            updateDeliveryStatus(del.id, 'delivered');
+                            showToast('success', `Delivery ${trackingNo} marked as Delivered!`);
+                          }}
+                          className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-all shadow-xs cursor-pointer"
                         >
                           Mark Delivered
                         </button>
                       )}
 
-                      {/* Cancel shipment if not delivered */}
                       {del.status !== 'delivered' && del.status !== 'canceled' && (
                         <button
+                          type="button"
                           onClick={() => setCancelModalDelivery(del)}
-                          className="p-1.5 rounded-xl text-neutral-400 hover:text-red-500 hover:bg-red-500/10 transition-colors"
-                          title="Cancel / Void Shipment"
+                          className="p-1.5 rounded-xl text-neutral-400 hover:text-red-500 hover:bg-red-500/10 transition-colors cursor-pointer"
+                          title="Cancel Dispatch"
                         >
                           <X className="w-4 h-4" />
                         </button>
@@ -814,38 +799,30 @@ export const AdminDispatch: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* Shipment Details Bar */}
-                  <div className="pt-3 border-t border-neutral-100 dark:border-neutral-800 flex flex-wrap items-center justify-between text-xs text-neutral-500 gap-2">
+                  {/* Details Bar */}
+                  <div className="pt-2.5 border-t border-neutral-100 dark:border-neutral-800 flex flex-wrap items-center justify-between text-xs text-neutral-500 gap-2">
                     <div className="flex flex-wrap items-center gap-3">
                       <span>
-                        Carrier:{' '}
-                        <strong className="text-neutral-700 dark:text-neutral-300">
-                          {del.courierName}
-                        </strong>
+                        Carrier: <strong className="text-neutral-700 dark:text-neutral-300">{del.courierName}</strong>
                       </span>
-                      {del.jtSortingCode && (
-                        <span className="font-mono text-[11px] bg-neutral-100 dark:bg-neutral-800 px-2 py-0.5 rounded">
-                          Route: {del.jtSortingCode}
-                        </span>
-                      )}
                       {del.driverName && (
                         <span>
-                          Driver:{' '}
-                          <strong className="text-neutral-700 dark:text-neutral-300">
-                            {del.driverName}
-                          </strong>
+                          Driver: <strong className="text-neutral-700 dark:text-neutral-300">{del.driverName}</strong>
+                          {del.vehiclePlateNo ? ` (${del.vehiclePlateNo})` : ''}
                         </span>
                       )}
                     </div>
-
                     <div>
                       <span>
-                        Scheduled:{' '}
-                        {new Date(del.scheduledAt).toLocaleDateString('en-US', {
-                          month: 'short',
-                          day: 'numeric',
-                          year: 'numeric',
-                        })}
+                        ETD:{' '}
+                        <strong className="text-neutral-700 dark:text-neutral-300">
+                          {new Date(del.scheduledAt).toLocaleString([], {
+                            month: 'short',
+                            day: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })}
+                        </strong>
                       </span>
                     </div>
                   </div>
@@ -856,7 +833,7 @@ export const AdminDispatch: React.FC = () => {
         </div>
       )}
 
-      {/* DISPATCH CREATION MODAL */}
+      {/* NORMAL DISPATCH CREATION MODAL */}
       {showDispatchModal && selectedOrderForDispatch && (
         <div className="fixed inset-0 z-60 flex items-center justify-center bg-black/70 backdrop-blur-xs p-4 overflow-y-auto">
           <div
@@ -876,8 +853,9 @@ export const AdminDispatch: React.FC = () => {
                 </p>
               </div>
               <button
+                type="button"
                 onClick={() => setShowDispatchModal(false)}
-                className="p-1.5 rounded-xl hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-400 hover:text-white"
+                className="p-1.5 rounded-xl hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-400 hover:text-white cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -885,169 +863,116 @@ export const AdminDispatch: React.FC = () => {
 
             {/* Form */}
             <form onSubmit={handleExecuteDispatch} className="overflow-y-auto space-y-4 py-4 pr-1">
-              {/* Courier / Dispatch Method Toggle Switch */}
+              {/* Method Selector: In-House Fleet vs Third-Party Courier */}
               <div className="space-y-1.5">
-                <label className="block text-xs font-bold uppercase tracking-wider text-neutral-400">
-                  Courier / Dispatch Method
+                <label className="block text-xs font-bold uppercase tracking-wider text-neutral-500">
+                  Logistics & Dispatch Method
                 </label>
                 <div className="grid grid-cols-2 gap-2 p-1 rounded-2xl bg-neutral-100 dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800">
                   <button
                     type="button"
-                    onClick={() => setDispatchMethod('jt_express')}
-                    className={`py-2.5 px-3 rounded-xl text-xs font-black transition-all flex items-center justify-center space-x-2 ${
-                      dispatchMethod === 'jt_express'
-                        ? 'bg-red-600 text-white shadow-md'
-                        : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-white'
-                    }`}
-                  >
-                    <span className="px-1.5 py-0.5 rounded bg-white text-red-600 text-[10px] font-black">
-                      J&T
-                    </span>
-                    <span>J&T Express (API)</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setDispatchMethod('company_driver')}
-                    className={`py-2.5 px-3 rounded-xl text-xs font-black transition-all flex items-center justify-center space-x-2 ${
-                      dispatchMethod === 'company_driver'
-                        ? 'bg-[#80C7F2] text-neutral-900 shadow-md'
+                    onClick={() => {
+                      setDispatchType('company_driver');
+                      setTrackingOrPlate(`TRIP-NGA-${selectedOrderForDispatch.id}`);
+                    }}
+                    className={`py-2.5 px-3 rounded-xl text-xs font-black transition-all flex items-center justify-center space-x-2 cursor-pointer ${
+                      dispatchType === 'company_driver'
+                        ? 'bg-[#F37021] text-white shadow-md'
                         : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-white'
                     }`}
                   >
                     <Truck className="w-4 h-4" />
-                    <span>Company Driver Fleet</span>
+                    <span>In-House Commissary Fleet</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDispatchType('courier');
+                      setTrackingOrPlate(selectedOrderForDispatch.trackingNumber || '');
+                    }}
+                    className={`py-2.5 px-3 rounded-xl text-xs font-black transition-all flex items-center justify-center space-x-2 cursor-pointer ${
+                      dispatchType === 'courier'
+                        ? 'bg-sky-600 text-white shadow-md'
+                        : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-white'
+                    }`}
+                  >
+                    <Package className="w-4 h-4" />
+                    <span>Third-Party Courier</span>
                   </button>
                 </div>
               </div>
 
-              {/* J&T Express Specific Auto-Populated Form */}
-              {dispatchMethod === 'jt_express' ? (
-                <div className="space-y-3.5 p-4 rounded-2xl bg-red-500/5 border border-red-500/20">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[11px] font-bold text-red-600 dark:text-red-400 uppercase tracking-wider flex items-center space-x-1">
-                      <ShieldCheck className="w-3.5 h-3.5" />
-                      <span>J&T Express Open Platform Auto-Population</span>
-                    </span>
-                    <span className="text-[10px] font-mono text-neutral-400">
-                      Destination: {resolveDestinationHub(receiverAddress || receiverCity).hubCode}
-                    </span>
-                  </div>
-
+              {/* Courier Specific Fields */}
+              {dispatchType === 'courier' && (
+                <div className="p-4 rounded-2xl bg-sky-500/5 border border-sky-500/20 space-y-3">
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-[11px] font-bold text-neutral-400 mb-1">
-                        Receiver / Branch Manager
+                      <label className="block text-xs font-bold text-neutral-700 dark:text-neutral-300 mb-1">
+                        Courier Partner
+                      </label>
+                      <select
+                        value={courierName}
+                        onChange={(e) => setCourierName(e.target.value)}
+                        className={`w-full p-2.5 rounded-xl text-xs font-bold border focus:outline-none ${
+                          isDark ? 'bg-neutral-900 border-neutral-700 text-white' : 'bg-white border-neutral-300'
+                        }`}
+                      >
+                        {COMMON_COURIERS.map((c) => (
+                          <option key={c} value={c}>
+                            {c}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {courierName === 'Other Courier' && (
+                      <div>
+                        <label className="block text-xs font-bold text-neutral-700 dark:text-neutral-300 mb-1">
+                          Custom Courier Name
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          value={customCourierName}
+                          onChange={(e) => setCustomCourierName(e.target.value)}
+                          placeholder="e.g. DLTB Cargo / NinjaVan"
+                          className={`w-full p-2.5 rounded-xl text-xs border ${
+                            isDark ? 'bg-neutral-900 border-neutral-700 text-white' : 'bg-white border-neutral-300'
+                          }`}
+                        />
+                      </div>
+                    )}
+
+                    <div className={courierName === 'Other Courier' ? 'sm:col-span-2' : ''}>
+                      <label className="block text-xs font-bold text-neutral-700 dark:text-neutral-300 mb-1">
+                        Waybill / Tracking Number <span className="text-red-500">*</span>
                       </label>
                       <input
                         type="text"
                         required
-                        value={receiverName}
-                        onChange={(e) => setReceiverName(e.target.value)}
-                        placeholder="Store Manager Name"
-                        className={`w-full p-2.5 rounded-xl text-xs border focus:outline-none focus:ring-1 focus:ring-red-500 ${
+                        value={trackingOrPlate}
+                        onChange={(e) => setTrackingOrPlate(e.target.value)}
+                        placeholder="e.g. 782910384912"
+                        className={`w-full p-2.5 rounded-xl text-xs font-mono font-bold border focus:outline-none focus:ring-1 focus:ring-sky-500 ${
                           isDark ? 'bg-neutral-900 border-neutral-700 text-white' : 'bg-white border-neutral-300'
                         }`}
                       />
-                    </div>
-
-                    <div>
-                      <label className="block text-[11px] font-bold text-neutral-400 mb-1">
-                        Receiver Phone Number
-                      </label>
-                      <input
-                        type="text"
-                        required
-                        value={receiverPhone}
-                        onChange={(e) => setReceiverPhone(e.target.value)}
-                        placeholder="+63 917 123 4567"
-                        className={`w-full p-2.5 rounded-xl text-xs border focus:outline-none focus:ring-1 focus:ring-red-500 ${
-                          isDark ? 'bg-neutral-900 border-neutral-700 text-white' : 'bg-white border-neutral-300'
-                        }`}
-                      />
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-[11px] font-bold text-neutral-400 mb-1">
-                      Complete Delivery Street Address
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      value={receiverAddress}
-                      onChange={(e) => setReceiverAddress(e.target.value)}
-                      placeholder="Unit / Building, Street, Barangay"
-                      className={`w-full p-2.5 rounded-xl text-xs border focus:outline-none focus:ring-1 focus:ring-red-500 ${
-                        isDark ? 'bg-neutral-900 border-neutral-700 text-white' : 'bg-white border-neutral-300'
-                      }`}
-                    />
-                  </div>
-
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                    <div>
-                      <label className="block text-[10px] font-bold text-neutral-400 mb-1">City</label>
-                      <input
-                        type="text"
-                        value={receiverCity}
-                        onChange={(e) => setReceiverCity(e.target.value)}
-                        className={`w-full p-2 rounded-xl text-xs border ${
-                          isDark ? 'bg-neutral-900 border-neutral-700 text-white' : 'bg-white border-neutral-300'
-                        }`}
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-[10px] font-bold text-neutral-400 mb-1">Province</label>
-                      <input
-                        type="text"
-                        value={receiverProvince}
-                        onChange={(e) => setReceiverProvince(e.target.value)}
-                        className={`w-full p-2 rounded-xl text-xs border ${
-                          isDark ? 'bg-neutral-900 border-neutral-700 text-white' : 'bg-white border-neutral-300'
-                        }`}
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-[10px] font-bold text-neutral-400 mb-1">Weight (KG)</label>
-                      <input
-                        type="number"
-                        step="0.1"
-                        min="0.5"
-                        value={packageWeightKg}
-                        onChange={(e) => setPackageWeightKg(parseFloat(e.target.value) || 1)}
-                        className={`w-full p-2 rounded-xl text-xs border font-mono ${
-                          isDark ? 'bg-neutral-900 border-neutral-700 text-white' : 'bg-white border-neutral-300'
-                        }`}
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-[10px] font-bold text-neutral-400 mb-1">Value (PHP)</label>
-                      <input
-                        type="number"
-                        value={declaredValue}
-                        onChange={(e) => setDeclaredValue(parseInt(e.target.value) || 5000)}
-                        className={`w-full p-2 rounded-xl text-xs border font-mono ${
-                          isDark ? 'bg-neutral-900 border-neutral-700 text-white' : 'bg-white border-neutral-300'
-                        }`}
-                      />
+                      <p className="text-[10px] text-neutral-400 mt-1">
+                        From physical waybill receipt issued by courier.
+                      </p>
                     </div>
                   </div>
                 </div>
-              ) : (
-                /* Company Driver Specific Form */
-                <div className="space-y-3.5 p-4 rounded-2xl bg-sky-500/5 border border-sky-500/20">
-                  <span className="text-[11px] font-bold text-sky-600 dark:text-[#80C7F2] uppercase tracking-wider flex items-center space-x-1">
-                    <Truck className="w-3.5 h-3.5" />
-                    <span>In-House Commissary Fleet Assignment</span>
-                  </span>
+              )}
 
+              {/* In-House Fleet Specific Fields */}
+              {dispatchType === 'company_driver' && (
+                <div className="p-4 rounded-2xl bg-[#F37021]/5 border border-[#F37021]/20 space-y-3">
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-[11px] font-bold text-neutral-400 mb-1">
-                        Assigned Driver
+                      <label className="block text-xs font-bold text-neutral-700 dark:text-neutral-300 mb-1">
+                        Assigned Driver Name
                       </label>
                       <input
                         type="text"
@@ -1062,49 +987,138 @@ export const AdminDispatch: React.FC = () => {
                     </div>
 
                     <div>
-                      <label className="block text-[11px] font-bold text-neutral-400 mb-1">
-                        Vehicle Plate No.
+                      <label className="block text-xs font-bold text-neutral-700 dark:text-neutral-300 mb-1">
+                        Vehicle Plate Number
                       </label>
                       <input
                         type="text"
                         required
                         value={vehiclePlateNo}
                         onChange={(e) => setVehiclePlateNo(e.target.value)}
-                        placeholder="e.g. BCO-8821 (Van #1)"
+                        placeholder="e.g. BCO-8821"
+                        className={`w-full p-2.5 rounded-xl text-xs border font-mono ${
+                          isDark ? 'bg-neutral-900 border-neutral-700 text-white' : 'bg-white border-neutral-300'
+                        }`}
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-neutral-700 dark:text-neutral-300 mb-1">
+                        Driver Contact Phone
+                      </label>
+                      <input
+                        type="text"
+                        value={driverPhone}
+                        onChange={(e) => setDriverPhone(e.target.value)}
+                        placeholder="+63 917..."
                         className={`w-full p-2.5 rounded-xl text-xs border ${
                           isDark ? 'bg-neutral-900 border-neutral-700 text-white' : 'bg-white border-neutral-300'
                         }`}
                       />
                     </div>
-                  </div>
 
-                  <div>
-                    <label className="block text-[11px] font-bold text-neutral-400 mb-1">
-                      Delivery Address
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      value={receiverAddress}
-                      onChange={(e) => setReceiverAddress(e.target.value)}
-                      className={`w-full p-2.5 rounded-xl text-xs border ${
-                        isDark ? 'bg-neutral-900 border-neutral-700 text-white' : 'bg-white border-neutral-300'
-                      }`}
-                    />
+                    <div>
+                      <label className="block text-xs font-bold text-neutral-700 dark:text-neutral-300 mb-1">
+                        Trip Ticket / Dispatch Ref #
+                      </label>
+                      <input
+                        type="text"
+                        value={trackingOrPlate}
+                        onChange={(e) => setTrackingOrPlate(e.target.value)}
+                        placeholder="e.g. TRIP-NGA-001"
+                        className={`w-full p-2.5 rounded-xl text-xs border font-mono ${
+                          isDark ? 'bg-neutral-900 border-neutral-700 text-white' : 'bg-white border-neutral-300'
+                        }`}
+                      />
+                    </div>
                   </div>
                 </div>
               )}
 
+              {/* Schedule & Recipient Section */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-neutral-700 dark:text-neutral-300 mb-1">
+                    Estimated Time of Delivery (ETD) <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="datetime-local"
+                    required
+                    value={estimatedDeliveryTime}
+                    onChange={(e) => setEstimatedDeliveryTime(e.target.value)}
+                    className={`w-full p-2.5 rounded-xl text-xs border focus:outline-none ${
+                      isDark ? 'bg-neutral-900 border-neutral-700 text-white' : 'bg-white border-neutral-300'
+                    }`}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-neutral-700 dark:text-neutral-300 mb-1">
+                    Store Manager Contact
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={receiverName}
+                    onChange={(e) => setReceiverName(e.target.value)}
+                    placeholder="Store Manager Name"
+                    className={`w-full p-2.5 rounded-xl text-xs border ${
+                      isDark ? 'bg-neutral-900 border-neutral-700 text-white' : 'bg-white border-neutral-300'
+                    }`}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-neutral-700 dark:text-neutral-300 mb-1">
+                  Branch Destination Address
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={receiverAddress}
+                  onChange={(e) => setReceiverAddress(e.target.value)}
+                  className={`w-full p-2.5 rounded-xl text-xs border ${
+                    isDark ? 'bg-neutral-900 border-neutral-700 text-white' : 'bg-white border-neutral-300'
+                  }`}
+                />
+              </div>
+
+              {/* Read-Only Consignment Summary */}
+              <div className="p-3.5 rounded-2xl bg-neutral-100 dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 space-y-2">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-bold uppercase tracking-wider text-neutral-500">
+                    Consignment Cargo Summary
+                  </span>
+                  <span className="font-black text-emerald-600 dark:text-emerald-400">
+                    {selectedOrderForDispatch.items.reduce((s, it) => s + it.quantity, 0)} Units Total
+                  </span>
+                </div>
+
+                <div className="max-h-28 overflow-y-auto divide-y divide-neutral-200 dark:divide-neutral-800 text-xs">
+                  {selectedOrderForDispatch.items.map((it, idx) => (
+                    <div key={idx} className="py-1 flex items-center justify-between">
+                      <span className="text-neutral-700 dark:text-neutral-300 truncate max-w-[240px]">
+                        {it.productName}
+                      </span>
+                      <span className="font-bold text-neutral-900 dark:text-white">
+                        {it.quantity} packs
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
               {/* Handling Notes */}
               <div>
-                <label className="block text-xs font-bold text-neutral-400 mb-1">
-                  Handling Instructions & Transit Notes
+                <label className="block text-xs font-bold text-neutral-500 mb-1">
+                  Handling Instructions
                 </label>
                 <textarea
                   rows={2}
                   value={deliveryNotes}
                   onChange={(e) => setDeliveryNotes(e.target.value)}
-                  placeholder="Perishable gourmet marshmallows. Keep below 28°C..."
+                  placeholder="Perishable gourmet marshmallows..."
                   className={`w-full p-2.5 rounded-xl text-xs border ${
                     isDark ? 'bg-neutral-900 border-neutral-700 text-white' : 'bg-white border-neutral-300'
                   }`}
@@ -1116,7 +1130,7 @@ export const AdminDispatch: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setShowDispatchModal(false)}
-                  className="px-4 py-2 font-medium text-xs rounded-xl border border-neutral-300 dark:border-neutral-700"
+                  className="px-4 py-2 font-medium text-xs rounded-xl border border-neutral-300 dark:border-neutral-700 cursor-pointer"
                 >
                   Cancel
                 </button>
@@ -1124,28 +1138,10 @@ export const AdminDispatch: React.FC = () => {
                 <button
                   type="submit"
                   disabled={isSubmitting}
-                  className={`px-5 py-2.5 font-black text-xs rounded-xl text-white transition-all shadow-md flex items-center space-x-2 ${
-                    dispatchMethod === 'jt_express'
-                      ? 'bg-red-600 hover:bg-red-700'
-                      : 'bg-[#F37021] hover:bg-[#d85e15]'
-                  } ${isSubmitting ? 'opacity-70 cursor-not-allowed' : ''}`}
+                  className="px-5 py-2.5 font-black text-xs rounded-xl text-white bg-[#F37021] hover:bg-[#d85e15] transition-all shadow-md flex items-center space-x-2 cursor-pointer"
                 >
-                  {isSubmitting ? (
-                    <>
-                      <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                      <span>Generating Waybill...</span>
-                    </>
-                  ) : dispatchMethod === 'jt_express' ? (
-                    <>
-                      <Zap className="w-3.5 h-3.5" />
-                      <span>Generate J&T Waybill & Dispatch</span>
-                    </>
-                  ) : (
-                    <>
-                      <Truck className="w-3.5 h-3.5" />
-                      <span>Confirm Fleet Dispatch</span>
-                    </>
-                  )}
+                  <Send className="w-3.5 h-3.5" />
+                  <span>Confirm Dispatch & Print Gate Pass</span>
                 </button>
               </div>
             </form>
@@ -1163,11 +1159,11 @@ export const AdminDispatch: React.FC = () => {
           >
             <div className="flex items-center space-x-2 text-red-500 mb-2">
               <AlertTriangle className="w-5 h-5" />
-              <h3 className="text-base font-bold">Cancel Shipment & Void Waybill</h3>
+              <h3 className="text-base font-bold">Cancel Dispatch Record</h3>
             </div>
             <p className="text-xs text-neutral-500 mb-3">
               Are you sure you want to cancel delivery for Order #{cancelModalDelivery.orderId} (
-              {cancelModalDelivery.waybillNumber || cancelModalDelivery.trackingNumber})? This will notify J&T Express to void the waybill and revert the order status to approved.
+              {cancelModalDelivery.waybillNumber || cancelModalDelivery.trackingNumber})? This will revert the order status to approved.
             </p>
 
             <div className="space-y-1 mb-4">
@@ -1185,23 +1181,25 @@ export const AdminDispatch: React.FC = () => {
 
             <div className="flex items-center justify-end space-x-2">
               <button
+                type="button"
                 onClick={() => setCancelModalDelivery(null)}
-                className="px-3 py-1.5 text-xs font-bold rounded-xl border border-neutral-300 dark:border-neutral-700"
+                className="px-3 py-1.5 text-xs font-bold rounded-xl border border-neutral-300 dark:border-neutral-700 cursor-pointer"
               >
                 Keep Active
               </button>
               <button
+                type="button"
                 onClick={handleConfirmCancel}
-                className="px-4 py-1.5 text-xs font-bold rounded-xl bg-red-600 text-white hover:bg-red-700"
+                className="px-4 py-1.5 text-xs font-bold rounded-xl bg-red-600 text-white hover:bg-red-700 cursor-pointer"
               >
-                Confirm Void
+                Confirm Cancel
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* REAL-TIME J&T TRACKING MODAL */}
+      {/* DELIVERY DETAILS MODAL */}
       {activeTrackingNumber && (
         <JTTrackingModal
           trackingNumber={activeTrackingNumber}
@@ -1215,13 +1213,15 @@ export const AdminDispatch: React.FC = () => {
         />
       )}
 
-      {/* PRINTABLE J&T SHIPPING LABEL */}
-      {activeLabelData && (
+      {/* PRINTABLE GATE PASS / MANIFEST MODAL */}
+      {activeManifestData && (
         <JTShippingLabel
-          labelData={activeLabelData}
-          onClose={() => setActiveLabelData(null)}
+          labelData={activeManifestData}
+          onClose={() => setActiveManifestData(null)}
         />
       )}
     </div>
   );
 };
+
+export default AdminDispatch;

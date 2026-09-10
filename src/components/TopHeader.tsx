@@ -27,6 +27,7 @@ import {
   PackageCheck,
   Trash2,
   ClipboardCheck,
+  FileCheck,
   Bell,
   Sparkles,
   CheckCheck,
@@ -129,6 +130,11 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
       subtitle: 'Inspect physical stock from HQ, count items, and record variance',
       icon: PackageCheck,
     },
+    shift_summary: {
+      title: 'Shift Summary & Approval',
+      subtitle: 'Consolidated review of all saved shift entries and submit for manager approval',
+      icon: FileCheck,
+    },
     log_validation: {
       title: 'Daily Log Validation & Audit',
       subtitle: 'Audit staff physical counts, sales, wastage and lock daily records',
@@ -158,11 +164,6 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
       title: 'Network Predictive Analytics',
       subtitle: '19-Branch predictive demand forecasts & replenishment KPIs',
       icon: TrendingUp,
-    },
-    user_management: {
-      title: 'System Administration & RBAC',
-      subtitle: 'Manage 3-tier user credentials, branch assignments, and roles',
-      icon: Users,
     },
     master_pricing: {
       title: 'Master Inventory & Pricing',

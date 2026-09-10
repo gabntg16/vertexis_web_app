@@ -10,9 +10,7 @@ import { CashTenderSafeguardModal, CashTenderSafeguardDetails } from '../safegua
 import { HighDiscountSafeguardModal, HighDiscountSafeguardDetails } from '../safeguards/HighDiscountSafeguardModal';
 import { generateClientRequestId } from '../../utils/idempotency';
 import {
-  paymentGatewayService,
-  isMockPaymentMode,
-  COMMISSARY_BANK_ACCOUNTS,
+  COMMISSARY_DIGITAL_WALLETS,
 } from '../../services/paymentGateway';
 import {
   ShoppingCart,
@@ -116,10 +114,6 @@ export const BranchSalesPOS: React.FC = () => {
   const [splitSecondaryMethod, setSplitSecondaryMethod] = useState<POSPaymentMethod>('GCash');
   const [splitSecondaryAmount, setSplitSecondaryAmount] = useState<string>('');
   const [splitSecondaryRef, setSplitSecondaryRef] = useState('');
-  const [posQrCodeUrl, setPosQrCodeUrl] = useState<string | null>(null);
-  const [isLoadingPosQr, setIsLoadingPosQr] = useState<boolean>(false);
-  const [showPosQrPhModal, setShowPosQrPhModal] = useState<boolean>(false);
-  const isMock = isMockPaymentMode();
 
   // Modals
   const [activeReceiptForModal, setActiveReceiptForModal] = useState<BIRReceipt | null>(null);
@@ -193,69 +187,6 @@ export const BranchSalesPOS: React.FC = () => {
   }, [grossSubtotal, discountType, customDiscountValue]);
 
   const netPayable = Math.max(0, grossSubtotal - discountAmount);
-
-  // Auto-generate QR Ph whenever digital method is selected or netPayable changes
-  useEffect(() => {
-    let active = true;
-    async function loadPosQr() {
-      if (
-        !isCheckoutOpen ||
-        selectedMethod === 'Cash' ||
-        (paymentMode === 'split' && splitSecondaryMethod === 'Cash')
-      ) {
-        setPosQrCodeUrl(null);
-        return;
-      }
-
-      setIsLoadingPosQr(true);
-      try {
-        const methodKey = (
-          selectedMethod === 'GCash'
-            ? 'gcash'
-            : selectedMethod === 'Maya'
-            ? 'maya'
-            : 'bank_transfer'
-        ) as 'gcash' | 'maya' | 'bank_transfer';
-
-        const amount = paymentMode === 'single' ? netPayable : parseFloat(splitSecondaryAmount) || netPayable;
-        const dummyOrderId = `POS-${Date.now().toString().slice(-6)}`;
-        const intent = await paymentGatewayService.createPaymentIntent(dummyOrderId, amount, methodKey, {
-          branchName: currentBranch.name,
-          customerName: customerName || undefined,
-        });
-
-        if (active) {
-          setPosQrCodeUrl(intent.qrCodeUrl || null);
-          if (!paymentReference && intent.referenceNumber) {
-            setPaymentReference(intent.referenceNumber);
-          }
-        }
-      } catch (e) {
-        console.error('POS QR Generation error:', e);
-      } finally {
-        if (active) setIsLoadingPosQr(false);
-      }
-    }
-
-    loadPosQr();
-    return () => {
-      active = false;
-    };
-  }, [isCheckoutOpen, selectedMethod, netPayable, paymentMode, splitSecondaryMethod, splitSecondaryAmount, currentBranch.name, customerName, paymentReference]);
-
-  const handleGenerateDigitalRef = (method: POSPaymentMethod) => {
-    const methodKey =
-      method === 'GCash' ? 'gcash' : method === 'Maya' ? 'maya' : method === 'Bank Transfer' ? 'bank_transfer' : 'cash';
-    const ref = paymentGatewayService.generateSampleReferenceNumber(methodKey);
-    setPaymentReference(ref);
-  };
-
-  const handleGenerateSplitDigitalRef = (method: POSPaymentMethod) => {
-    const methodKey =
-      method === 'GCash' ? 'gcash' : method === 'Maya' ? 'maya' : method === 'Bank Transfer' ? 'bank_transfer' : 'cash';
-    const ref = paymentGatewayService.generateSampleReferenceNumber(methodKey);
-    setSplitSecondaryRef(ref);
-  };
 
   // VAT breakdown calculation
   const vatCalculations = useMemo(() => {
@@ -1451,57 +1382,42 @@ export const BranchSalesPOS: React.FC = () => {
                       </div>
                     </div>
                   ) : (
-                    /* Digital / Bank Reference & Dynamic QR Code Input */
+                    /* Digital / Bank Payee Details & Manual Reference Input */
                     <div className="space-y-3 p-3.5 bg-neutral-50 dark:bg-neutral-800/40 rounded-xl border border-neutral-200 dark:border-neutral-700">
                       <div className="flex items-center justify-between">
                         <label className="text-xs font-bold text-neutral-700 dark:text-neutral-300">
-                          {selectedMethod} Customer QR Ph & Settlement
+                          {selectedMethod} Payee Details & Verification
                         </label>
-                        <button
-                          type="button"
-                          onClick={() => handleGenerateDigitalRef(selectedMethod)}
-                          className="px-2 py-0.5 rounded text-[11px] font-semibold text-[#F37021] hover:underline flex items-center space-x-1"
-                        >
-                          <Sparkles className="w-3 h-3" />
-                          <span>Generate Ref</span>
-                        </button>
+                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400 border border-neutral-200 dark:border-neutral-700">
+                          Manual Reference
+                        </span>
                       </div>
 
-                      {/* Dynamic Customer-Facing QR Ph Box */}
-                      <div className="p-3 bg-white dark:bg-neutral-900 rounded-xl border border-neutral-200 dark:border-neutral-800 flex flex-col sm:flex-row items-center gap-3">
-                        <div className="p-1.5 bg-white rounded-lg shadow-2xs border border-neutral-200 flex-shrink-0">
-                          {isLoadingPosQr ? (
-                            <div className="w-24 h-24 flex items-center justify-center text-[10px] text-neutral-400">
-                              <RefreshCw className="w-4 h-4 animate-spin" />
-                            </div>
-                          ) : posQrCodeUrl ? (
-                            <img
-                              src={posQrCodeUrl}
-                              alt={`${selectedMethod} QR`}
-                              className="w-24 h-24 object-contain rounded"
-                              referrerPolicy="no-referrer"
-                            />
-                          ) : (
-                            <div className="w-24 h-24 flex items-center justify-center text-[10px] text-neutral-400">
-                              QR Ph
-                            </div>
-                          )}
+                      {/* Payee Account Details Card */}
+                      <div className="p-3 bg-white dark:bg-neutral-900 rounded-xl border border-neutral-200 dark:border-neutral-800 space-y-1.5 text-xs">
+                        <div className="flex items-center justify-between">
+                          <span className="text-neutral-500">Payee Name:</span>
+                          <span className="font-bold text-neutral-900 dark:text-white">
+                            {selectedMethod === 'GCash'
+                              ? COMMISSARY_DIGITAL_WALLETS.gcash.merchantName
+                              : selectedMethod === 'Maya'
+                              ? COMMISSARY_DIGITAL_WALLETS.maya.merchantName
+                              : 'THE MARSH BITES CONFECTIONERY INC.'}
+                          </span>
                         </div>
-
-                        <div className="flex-1 space-y-1 text-xs text-neutral-600 dark:text-neutral-300">
-                          <div className="flex items-center space-x-1 font-bold text-neutral-900 dark:text-white">
-                            <span>Scan with {selectedMethod} App</span>
-                            <span className="px-1.5 py-0.2 rounded text-[9px] bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 font-bold">
-                              QR Ph
-                            </span>
-                          </div>
-                          <p className="text-[11px] text-neutral-500">
-                            Present terminal QR to customer or enter transaction auth trace below.
-                          </p>
-                          <div className="text-[10px] font-mono text-neutral-400 pt-0.5">
-                            Merchant: <strong>THE MARSH BITES PH</strong> • Fee: <strong>₱0.00</strong>
-                          </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-neutral-500">Account / Mobile:</span>
+                          <span className="font-mono font-bold text-[#F37021]">
+                            {selectedMethod === 'GCash'
+                              ? COMMISSARY_DIGITAL_WALLETS.gcash.walletNumber
+                              : selectedMethod === 'Maya'
+                              ? COMMISSARY_DIGITAL_WALLETS.maya.walletNumber
+                              : 'BDO 0048-2918-4491'}
+                          </span>
                         </div>
+                        <p className="text-[11px] text-neutral-500 pt-1 border-t border-neutral-100 dark:border-neutral-800">
+                          Customer transfers directly to the account above. Inspect customer's completed payment screen and record the reference number below.
+                        </p>
                       </div>
 
                       {/* Reference Input */}
@@ -1513,31 +1429,16 @@ export const BranchSalesPOS: React.FC = () => {
                           type="text"
                           value={paymentReference}
                           onChange={(e) => setPaymentReference(e.target.value)}
-                          placeholder="e.g. GC-8824-9102 or Bank Ref"
+                          placeholder={
+                            selectedMethod === 'GCash'
+                              ? 'e.g. 20260908-109283 (GCash Ref)'
+                              : selectedMethod === 'Maya'
+                              ? 'e.g. MY-20260908-9842 (Maya Ref)'
+                              : 'e.g. 20260908-BDO-84920 (Bank Trace #)'
+                          }
                           className="w-full px-3 py-2 text-xs bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-xl focus:ring-1 focus:ring-[#F37021] focus:outline-hidden font-mono"
                         />
                       </div>
-
-                      {/* Sandbox Quick Simulator Button */}
-                      {isMock && (
-                        <div className="pt-1 flex items-center justify-between">
-                          <span className="text-[10px] text-amber-700 dark:text-amber-400 font-medium">
-                            ⚡ Sandbox auto-fill:
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              handleGenerateDigitalRef(selectedMethod);
-                              setSuccessMsg(`Simulated ${selectedMethod} approval!`);
-                              setTimeout(() => setSuccessMsg(null), 3000);
-                            }}
-                            className="px-2.5 py-1 rounded-lg bg-amber-500/15 text-amber-800 dark:text-amber-300 hover:bg-amber-500/25 text-[11px] font-bold transition-colors flex items-center space-x-1"
-                          >
-                            <Zap className="w-3 h-3" />
-                            <span>Simulate Customer Approval</span>
-                          </button>
-                        </div>
-                      )}
                     </div>
                   )}
                 </div>
@@ -1573,14 +1474,9 @@ export const BranchSalesPOS: React.FC = () => {
                       <h4 className="text-xs font-bold text-neutral-800 dark:text-neutral-200 uppercase tracking-wider">
                         Tender 2: Digital / Bank Portion
                       </h4>
-                      <button
-                        type="button"
-                        onClick={() => handleGenerateSplitDigitalRef(splitSecondaryMethod)}
-                        className="text-[11px] font-semibold text-[#F37021] hover:underline flex items-center space-x-1"
-                      >
-                        <Sparkles className="w-3 h-3" />
-                        <span>Auto Ref</span>
-                      </button>
+                      <span className="text-[10px] text-neutral-400 font-medium">
+                        Manual Trace Input
+                      </span>
                     </div>
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                       <div>

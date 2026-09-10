@@ -1,32 +1,25 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Order, DigitalPaymentMethod, PaymentIntent, PaymentGatewayStatus } from '../../types';
+import React, { useState, useRef } from 'react';
+import { Order, DigitalPaymentMethod, PaymentGatewayStatus } from '../../types';
 import {
-  paymentGatewayService,
   COMMISSARY_BANK_ACCOUNTS,
   COMMISSARY_DIGITAL_WALLETS,
-  isMockPaymentMode,
-  subscribeToPaymentUpdates,
 } from '../../services/paymentGateway';
 import { validateUploadedFile } from '../../utils/fileValidation';
 import {
   X,
   Smartphone,
   Building2,
-  Banknote,
-  QrCode,
-  ExternalLink,
   Copy,
   Check,
-  RefreshCw,
-  Clock,
   ShieldCheck,
   AlertCircle,
   CheckCircle2,
   Upload,
-  Zap,
   Info,
-  Sparkles,
-  Lock,
+  Receipt,
+  FileText,
+  Image as ImageIcon,
+  Trash2,
 } from 'lucide-react';
 
 interface BranchPaymentModalProps {
@@ -34,31 +27,16 @@ interface BranchPaymentModalProps {
   branchName: string;
   themeMode: 'light' | 'dark';
   onClose: () => void;
-  onPaymentComplete: (proofUrl: string, paymentDetails: {
-    paymentMethod: DigitalPaymentMethod | string;
-    paymentIntentId?: string;
-    referenceNumber?: string;
-    status: PaymentGatewayStatus;
-  }) => void;
+  onPaymentComplete: (
+    proofUrl: string,
+    paymentDetails: {
+      paymentMethod: DigitalPaymentMethod | string;
+      paymentIntentId?: string;
+      referenceNumber?: string;
+      status: PaymentGatewayStatus;
+    }
+  ) => void;
 }
-
-const SAMPLE_PAYMENT_PROOFS = [
-  {
-    label: 'GCash Payment Confirmation Receipt',
-    method: 'gcash',
-    url: 'https://images.unsplash.com/photo-1554224154-26032ffc0d07?w=600&auto=format&fit=crop&q=80',
-  },
-  {
-    label: 'Maya Official Transaction Slip',
-    method: 'maya',
-    url: 'https://images.unsplash.com/photo-1554224155-6726b3ff858f?w=600&auto=format&fit=crop&q=80',
-  },
-  {
-    label: 'BDO InstaPay Transfer Receipt',
-    method: 'bank_transfer',
-    url: 'https://images.unsplash.com/photo-1563986768609-322da13575f3?w=600&auto=format&fit=crop&q=80',
-  },
-];
 
 export const BranchPaymentModal: React.FC<BranchPaymentModalProps> = ({
   order,
@@ -68,31 +46,45 @@ export const BranchPaymentModal: React.FC<BranchPaymentModalProps> = ({
   onPaymentComplete,
 }) => {
   const isDark = themeMode === 'dark';
-  const isMock = isMockPaymentMode();
 
-  const [selectedMethod, setSelectedMethod] = useState<DigitalPaymentMethod>('gcash');
+  // Manual payment method selection
+  const [selectedMethod, setSelectedMethod] = useState<'gcash' | 'maya' | 'bank_transfer'>('gcash');
   const [selectedBankIndex, setSelectedBankIndex] = useState(0);
-  
-  // Payment Intent State
-  const [currentIntent, setCurrentIntent] = useState<PaymentIntent | null>(null);
-  const [isLoadingIntent, setIsLoadingIntent] = useState(false);
-  const [isVerifying, setIsVerifying] = useState(false);
-  const [isSimulatingApproval, setIsSimulatingApproval] = useState(false);
-  
-  // Manual / Bank Proof State
-  const [proofUrlInput, setProofUrlInput] = useState('');
+
+  // Manual Proof of Payment fields
   const [manualReference, setManualReference] = useState('');
+  const [proofUrlInput, setProofUrlInput] = useState('');
+  const [showUrlFallback, setShowUrlFallback] = useState(false);
   const [copiedField, setCopiedField] = useState<string | null>(null);
+
+  // File Upload & Validation state
   const [isValidatingFile, setIsValidatingFile] = useState(false);
-  const [validatedFileInfo, setValidatedFileInfo] = useState<{ fileName: string; fileSize: number; mimeType: string } | null>(null);
+  const [validatedFileInfo, setValidatedFileInfo] = useState<{
+    fileName: string;
+    fileSize: number;
+    mimeType: string;
+    previewUrl?: string;
+  } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Notification Banner
+  const [toastMessage, setToastMessage] = useState<{
+    type: 'success' | 'error' | 'info';
+    text: string;
+  } | null>(null);
+
+  const copyToClipboard = (text: string, fieldKey: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedField(fieldKey);
+    setTimeout(() => setCopiedField(null), 2500);
+  };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     setIsValidatingFile(true);
-    setToastMessage({ type: 'info', text: 'Scanning file integrity & magic bytes...' });
+    setToastMessage({ type: 'info', text: 'Validating receipt file integrity...' });
 
     try {
       const validation = await validateUploadedFile(file, {
@@ -111,11 +103,13 @@ export const BranchPaymentModal: React.FC<BranchPaymentModalProps> = ({
         return;
       }
 
-      setProofUrlInput(validation.dataUrl || '');
+      const dataUrl = validation.dataUrl || '';
+      setProofUrlInput(dataUrl);
       setValidatedFileInfo({
         fileName: file.name,
         fileSize: file.size,
         mimeType: validation.detectedMimeType || file.type,
+        previewUrl: dataUrl.startsWith('data:image') ? dataUrl : undefined,
       });
 
       setToastMessage({
@@ -131,202 +125,39 @@ export const BranchPaymentModal: React.FC<BranchPaymentModalProps> = ({
       setIsValidatingFile(false);
     }
   };
-  
-  // Timers & Status
-  const [timeLeftSec, setTimeLeftSec] = useState(1800); // 30 minutes
-  const [toastMessage, setToastMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
 
-  // Generate / Fetch Payment Intent when method changes
-  useEffect(() => {
-    let isMounted = true;
-    async function loadIntent() {
-      setIsLoadingIntent(true);
-      try {
-        const intent = await paymentGatewayService.createPaymentIntent(
-          order.id,
-          order.totalAmount,
-          selectedMethod,
-          {
-            branchName,
-            description: `Wholesale Requisition #${order.id} for ${branchName}`,
-          }
-        );
-        if (isMounted) {
-          setCurrentIntent(intent);
-          if (intent.referenceNumber) {
-            setManualReference(intent.referenceNumber);
-          }
-        }
-      } catch (err: any) {
-        if (isMounted) {
-          setToastMessage({
-            type: 'error',
-            text: err.message || 'Failed to initialize payment gateway intent.',
-          });
-        }
-      } finally {
-        if (isMounted) {
-          setIsLoadingIntent(false);
-        }
-      }
-    }
-
-    loadIntent();
-    return () => {
-      isMounted = false;
-    };
-  }, [order.id, order.totalAmount, selectedMethod, branchName]);
-
-  // Listen to Webhooks
-  useEffect(() => {
-    const unsubscribe = subscribeToPaymentUpdates((updatedIntent) => {
-      if (currentIntent && updatedIntent.id === currentIntent.id) {
-        setCurrentIntent(updatedIntent);
-        if (updatedIntent.status === 'SUCCESSFUL') {
-          setToastMessage({
-            type: 'success',
-            text: `Payment of ₱${order.totalAmount.toLocaleString()} verified via ${selectedMethod.toUpperCase()}!`,
-          });
-        } else if (updatedIntent.status === 'FAILED') {
-          setToastMessage({
-            type: 'error',
-            text: 'Payment was declined or failed. Please retry.',
-          });
-        }
-      }
-    });
-    return unsubscribe;
-  }, [currentIntent, order.totalAmount, selectedMethod]);
-
-  // Expiration countdown
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setTimeLeftSec((prev) => {
-        if (prev <= 1) {
-          clearInterval(timer);
-          setToastMessage({
-            type: 'error',
-            text: 'Payment session expired. Please regenerate a new QR code.',
-          });
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-    return () => clearInterval(timer);
-  }, []);
-
-  const formatCountdown = (seconds: number) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  const handleRemoveFile = () => {
+    setProofUrlInput('');
+    setValidatedFileInfo(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
-  const copyToClipboard = (text: string, fieldKey: string) => {
-    navigator.clipboard.writeText(text);
-    setCopiedField(fieldKey);
-    setTimeout(() => setCopiedField(null), 2500);
-  };
-
-  // Simulate Instant Mobile Payment (Sandbox)
-  const handleSimulatePaymentApproval = async () => {
-    if (!currentIntent) return;
-    setIsSimulatingApproval(true);
-    try {
-      const updated = await paymentGatewayService.simulatePaymentApproval(currentIntent.id);
-      setCurrentIntent(updated);
-      setToastMessage({
-        type: 'success',
-        text: `Sandbox Approval: E-Wallet confirmed! Trans Ref: ${updated.referenceNumber}`,
-      });
-
-      // Auto-populate proof URL with e-wallet confirmation
-      const sampleProof =
-        selectedMethod === 'gcash'
-          ? SAMPLE_PAYMENT_PROOFS[0].url
-          : selectedMethod === 'maya'
-          ? SAMPLE_PAYMENT_PROOFS[1].url
-          : SAMPLE_PAYMENT_PROOFS[2].url;
-
-      // Finish and notify parent after a brief feedback delay
-      setTimeout(() => {
-        onPaymentComplete(sampleProof, {
-          paymentMethod: selectedMethod,
-          paymentIntentId: updated.id,
-          referenceNumber: updated.referenceNumber,
-          status: 'SUCCESSFUL',
-        });
-      }, 1000);
-    } catch (err: any) {
-      setToastMessage({
-        type: 'error',
-        text: err.message || 'Payment simulation failed.',
-      });
-    } finally {
-      setIsSimulatingApproval(false);
-    }
-  };
-
-  // Check Status button
-  const handleCheckStatus = async () => {
-    if (!currentIntent) return;
-    setIsVerifying(true);
-    try {
-      const res = await paymentGatewayService.checkPaymentStatus(currentIntent.id);
-      if (res.status === 'SUCCESSFUL') {
-        setToastMessage({
-          type: 'success',
-          text: 'Payment has been successfully verified by PayMongo/Maya gateway!',
-        });
-        const sampleProof = SAMPLE_PAYMENT_PROOFS[0].url;
-        onPaymentComplete(sampleProof, {
-          paymentMethod: selectedMethod,
-          paymentIntentId: currentIntent.id,
-          referenceNumber: currentIntent.referenceNumber,
-          status: 'SUCCESSFUL',
-        });
-      } else if (res.status === 'FAILED') {
-        setToastMessage({
-          type: 'error',
-          text: 'Payment was canceled or failed.',
-        });
-      } else if (res.status === 'EXPIRED') {
-        setToastMessage({
-          type: 'error',
-          text: 'Payment QR code expired. Please generate a new one.',
-        });
-      } else {
-        setToastMessage({
-          type: 'info',
-          text: 'Payment is still PENDING. Please complete the transfer on your mobile device.',
-        });
-      }
-    } catch {
-      setToastMessage({
-        type: 'error',
-        text: 'Error contacting payment status server.',
-      });
-    } finally {
-      setIsVerifying(false);
-    }
-  };
-
-  // Submit Bank Transfer or Manual Proof
-  const handleManualProofSubmit = (e: React.FormEvent) => {
+  const handleSubmitProof = (e: React.FormEvent) => {
     e.preventDefault();
+    if (!manualReference.trim()) {
+      setToastMessage({
+        type: 'error',
+        text: 'Please enter the transaction reference / trace number from your receipt.',
+      });
+      return;
+    }
+
     if (!proofUrlInput.trim()) {
-      setToastMessage({ type: 'error', text: 'Please provide a receipt screenshot image URL.' });
+      setToastMessage({
+        type: 'error',
+        text: 'Please upload a receipt screenshot or attach a valid proof URL.',
+      });
       return;
     }
 
     onPaymentComplete(proofUrlInput.trim(), {
       paymentMethod: selectedMethod,
-      paymentIntentId: currentIntent?.id,
-      referenceNumber: manualReference.trim() || currentIntent?.referenceNumber,
-      status: selectedMethod === 'cash' ? 'PENDING' : 'PENDING',
+      referenceNumber: manualReference.trim(),
+      status: 'PENDING',
     });
   };
 
+  const totalPacks = order.items.reduce((sum, item) => sum + item.quantity, 0);
   const activeBank = COMMISSARY_BANK_ACCOUNTS[selectedBankIndex] || COMMISSARY_BANK_ACCOUNTS[0];
 
   return (
@@ -336,38 +167,36 @@ export const BranchPaymentModal: React.FC<BranchPaymentModalProps> = ({
           isDark ? 'bg-[#181818] border-neutral-800 text-white' : 'bg-white border-neutral-200 text-neutral-900'
         }`}
       >
-        {/* Header */}
+        {/* Modal Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-900/80">
           <div className="flex items-center space-x-3">
             <div className="w-10 h-10 rounded-2xl bg-[#F37021]/10 text-[#F37021] flex items-center justify-center flex-shrink-0">
-              <QrCode className="w-5 h-5" />
+              <Receipt className="w-5 h-5" />
             </div>
             <div>
               <div className="flex items-center space-x-2">
                 <h3 className="text-base font-bold text-neutral-900 dark:text-white">
-                  Digital Checkout & Settlement
+                  Manual Proof of Payment (PoP) Verification
                 </h3>
-                {isMock && (
-                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-800">
-                    SANDBOX / MOCK ACTIVE
-                  </span>
-                )}
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400 border border-neutral-200 dark:border-neutral-700">
+                  Manual Audit
+                </span>
               </div>
               <p className="text-xs text-neutral-500">
-                Order #{order.id} • {order.packageName || 'Commissary Requisition'} • Total: <strong>₱{order.totalAmount.toLocaleString()}</strong>
+                Order #{order.id} • {branchName}
               </p>
             </div>
           </div>
 
           <button
             onClick={onClose}
-            className="p-1.5 rounded-xl text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200 hover:bg-neutral-200/50 dark:hover:bg-neutral-800 transition-colors"
+            className="p-1.5 rounded-xl text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200 hover:bg-neutral-200/50 dark:hover:bg-neutral-800 transition-colors cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        {/* Toast alert banner */}
+        {/* Toast Alert Banner */}
         {toastMessage && (
           <div
             className={`px-5 py-2.5 text-xs font-medium flex items-center justify-between transition-all ${
@@ -379,310 +208,172 @@ export const BranchPaymentModal: React.FC<BranchPaymentModalProps> = ({
             }`}
           >
             <div className="flex items-center space-x-2">
-              {toastMessage.type === 'success' && <CheckCircle2 className="w-4 h-4 text-emerald-600" />}
-              {toastMessage.type === 'error' && <AlertCircle className="w-4 h-4 text-red-600" />}
-              {toastMessage.type === 'info' && <Info className="w-4 h-4 text-sky-600" />}
+              {toastMessage.type === 'success' && <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />}
+              {toastMessage.type === 'error' && <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />}
+              {toastMessage.type === 'info' && <Info className="w-4 h-4 text-sky-600 shrink-0" />}
               <span>{toastMessage.text}</span>
             </div>
-            <button onClick={() => setToastMessage(null)} className="text-xs opacity-70 hover:opacity-100">
+            <button onClick={() => setToastMessage(null)} className="text-xs opacity-70 hover:opacity-100 cursor-pointer">
               ✕
             </button>
           </div>
         )}
 
+        {/* Content Body */}
         <div className="p-6 overflow-y-auto space-y-5 flex-1">
-          {/* Method Selection Tabs */}
-          <div>
-            <label className="block text-xs font-bold uppercase tracking-wider text-neutral-400 mb-2">
-              Select Payment Option:
-            </label>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-              {[
-                {
-                  id: 'gcash',
-                  label: 'GCash QR',
-                  sub: 'E-Wallet',
-                  icon: Smartphone,
-                  color: 'text-blue-500',
-                  activeBorder: 'border-blue-500 bg-blue-50/50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-300 ring-2 ring-blue-500/20',
-                },
-                {
-                  id: 'maya',
-                  label: 'Maya QR',
-                  sub: 'Digital Wallet',
-                  icon: Smartphone,
-                  color: 'text-emerald-500',
-                  activeBorder: 'border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-300 ring-2 ring-emerald-500/20',
-                },
-                {
-                  id: 'bank_transfer',
-                  label: 'Bank Transfer',
-                  sub: 'InstaPay / PESONet',
-                  icon: Building2,
-                  color: 'text-orange-500',
-                  activeBorder: 'border-[#F37021] bg-orange-50/50 dark:bg-orange-950/40 text-[#F37021] ring-2 ring-[#F37021]/20',
-                },
-                {
-                  id: 'cash',
-                  label: 'Cash on Delivery',
-                  sub: 'Franchise Terms',
-                  icon: Banknote,
-                  color: 'text-neutral-500',
-                  activeBorder: 'border-neutral-500 bg-neutral-100 dark:bg-neutral-800 text-neutral-900 dark:text-white ring-2 ring-neutral-500/20',
-                },
-              ].map((m) => {
-                const Icon = m.icon;
-                const isSelected = selectedMethod === m.id;
-                return (
-                  <button
-                    key={m.id}
-                    type="button"
-                    onClick={() => setSelectedMethod(m.id as DigitalPaymentMethod)}
-                    className={`p-3 rounded-2xl border text-left transition-all flex flex-col justify-between ${
-                      isSelected
-                        ? m.activeBorder + ' font-bold shadow-xs'
-                        : 'border-neutral-200 dark:border-neutral-800 text-neutral-600 dark:text-neutral-400 hover:border-neutral-300 dark:hover:border-neutral-700'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between mb-1.5">
-                      <Icon className={`w-4 h-4 ${m.color}`} />
-                      {isSelected && <span className="w-2 h-2 rounded-full bg-current"></span>}
-                    </div>
-                    <div>
-                      <div className="text-xs">{m.label}</div>
-                      <div className="text-[10px] opacity-75">{m.sub}</div>
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* =========================================================================
-              GCASH / MAYA QR CODE WORKFLOW
-              ========================================================================= */}
-          {(selectedMethod === 'gcash' || selectedMethod === 'maya') && (
-            <div className="space-y-4">
-              <div
-                className={`p-5 rounded-2xl border flex flex-col md:flex-row items-center gap-6 ${
-                  selectedMethod === 'gcash'
-                    ? 'bg-blue-50/40 dark:bg-blue-950/20 border-blue-200 dark:border-blue-900/60'
-                    : 'bg-emerald-50/40 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-900/60'
-                }`}
-              >
-                {/* QR Code Container */}
-                <div className="flex flex-col items-center flex-shrink-0">
-                  <div className="p-3 bg-white rounded-2xl shadow-md border border-neutral-200 relative group">
-                    {isLoadingIntent ? (
-                      <div className="w-48 h-48 flex flex-col items-center justify-center space-y-2 text-neutral-400">
-                        <RefreshCw className="w-6 h-6 animate-spin" />
-                        <span className="text-xs">Generating QR Ph...</span>
-                      </div>
-                    ) : currentIntent?.qrCodeUrl ? (
-                      <>
-                        <img
-                          src={currentIntent.qrCodeUrl}
-                          alt={`${selectedMethod.toUpperCase()} Payment QR Code`}
-                          className="w-48 h-48 rounded-lg object-contain"
-                          referrerPolicy="no-referrer"
-                        />
-                        {/* Overlay Logo / Watermark */}
-                        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                          <div className="w-10 h-10 rounded-xl bg-white shadow-md border border-neutral-100 flex items-center justify-center p-1 font-black text-[10px] text-neutral-900">
-                            {selectedMethod === 'gcash' ? (
-                              <span className="text-blue-600 font-extrabold">GCash</span>
-                            ) : (
-                              <span className="text-emerald-600 font-extrabold">Maya</span>
-                            )}
-                          </div>
-                        </div>
-                      </>
-                    ) : (
-                      <div className="w-48 h-48 flex items-center justify-center text-xs text-neutral-400">
-                        No QR available
-                      </div>
-                    )}
-                  </div>
-
-                  {/* QR Ph Badge */}
-                  <div className="mt-2 flex items-center space-x-1.5 text-[11px] text-neutral-500 dark:text-neutral-400 font-medium">
-                    <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
-                    <span>BSP & QR Ph Certified Standard</span>
-                  </div>
-                </div>
-
-                {/* Instructions & Payment Details */}
-                <div className="flex-1 space-y-3 w-full text-xs">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <span className="text-[11px] uppercase tracking-wider text-neutral-400 font-semibold block">
-                        Total Amount Payable
-                      </span>
-                      <span className="text-2xl font-black text-[#F37021]">
-                        ₱{order.totalAmount.toLocaleString()}
-                      </span>
-                    </div>
-                    <div className="text-right">
-                      <div className="flex items-center space-x-1 text-neutral-500 font-mono text-[11px]">
-                        <Clock className="w-3.5 h-3.5 text-amber-500" />
-                        <span>Expires in: {formatCountdown(timeLeftSec)}</span>
-                      </div>
-                      <span className="text-[10px] text-neutral-400">Zero Transaction Fee</span>
-                    </div>
-                  </div>
-
-                  {/* Intent Reference Info */}
-                  <div className="p-3 bg-white dark:bg-neutral-800/80 rounded-xl border border-neutral-200 dark:border-neutral-700 space-y-1.5">
-                    <div className="flex items-center justify-between text-neutral-600 dark:text-neutral-300">
-                      <span>Merchant Name:</span>
-                      <span className="font-semibold text-neutral-900 dark:text-white">
-                        THE MARSH BITES COMMISSARY
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between text-neutral-600 dark:text-neutral-300">
-                      <span>Payee Account / Mobile:</span>
-                      <span className="font-mono font-semibold text-neutral-900 dark:text-white">
-                        0917-884-2104
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between text-neutral-600 dark:text-neutral-300">
-                      <span>Reference / Trace No:</span>
-                      <div className="flex items-center space-x-1.5 font-mono font-bold text-neutral-900 dark:text-white">
-                        <span>{currentIntent?.referenceNumber || 'Generating...'}</span>
-                        {currentIntent?.referenceNumber && (
-                          <button
-                            type="button"
-                            onClick={() => copyToClipboard(currentIntent.referenceNumber, 'ref')}
-                            className="p-1 text-neutral-400 hover:text-neutral-700 dark:hover:text-white rounded"
-                            title="Copy reference number"
-                          >
-                            {copiedField === 'ref' ? (
-                              <Check className="w-3.5 h-3.5 text-emerald-500" />
-                            ) : (
-                              <Copy className="w-3.5 h-3.5" />
-                            )}
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Direct Checkout Link Button */}
-                  <div className="flex flex-wrap items-center gap-2 pt-1">
-                    {currentIntent?.checkoutUrl && (
-                      <a
-                        href={currentIntent.checkoutUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="px-3 py-2 rounded-xl bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 font-semibold text-xs hover:opacity-90 flex items-center space-x-1.5 shadow-xs transition-opacity"
-                      >
-                        <span>Open {selectedMethod.toUpperCase()} Direct Webpay</span>
-                        <ExternalLink className="w-3.5 h-3.5" />
-                      </a>
-                    )}
-
-                    <button
-                      type="button"
-                      onClick={handleCheckStatus}
-                      disabled={isVerifying}
-                      className="px-3 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-800 text-xs font-semibold flex items-center space-x-1.5 transition-colors"
-                    >
-                      <RefreshCw className={`w-3.5 h-3.5 ${isVerifying ? 'animate-spin' : ''}`} />
-                      <span>Check Payment Status</span>
-                    </button>
-                  </div>
-                </div>
+          {/* Section 1: Transaction Totals & Requisition Details */}
+          <div
+            className={`p-4 rounded-2xl border ${
+              isDark ? 'bg-neutral-900/60 border-neutral-800' : 'bg-neutral-50/80 border-neutral-200'
+            }`}
+          >
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <span className="text-[10px] font-bold uppercase tracking-wider text-neutral-400 block">
+                  Requisition Package
+                </span>
+                <p className="text-sm font-bold text-neutral-900 dark:text-white">
+                  {order.packageName || 'Commissary Requisition Order'}
+                </p>
+                <p className="text-xs text-neutral-500 mt-0.5">
+                  {totalPacks} total gourmet marshmallow packs ({order.items.length} flavor items)
+                </p>
               </div>
 
-              {/* Sandbox Quick Simulator */}
-              {isMock && (
-                <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs">
-                  <div className="flex items-center space-x-2.5">
-                    <Sparkles className="w-4 h-4 text-amber-600 dark:text-amber-400 flex-shrink-0" />
-                    <div>
-                      <span className="font-bold text-amber-900 dark:text-amber-200">
-                        Developer Sandbox Fast-Track:
-                      </span>
-                      <p className="text-neutral-600 dark:text-neutral-300 text-[11px]">
-                        Simulate mobile user scanning QR code and confirming payment in GCash / Maya app.
-                      </p>
-                    </div>
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={handleSimulatePaymentApproval}
-                    disabled={isSimulatingApproval}
-                    className="px-3.5 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs flex items-center space-x-1.5 shadow-xs transition-all flex-shrink-0"
-                  >
-                    <Zap className={`w-3.5 h-3.5 ${isSimulatingApproval ? 'animate-bounce' : ''}`} />
-                    <span>{isSimulatingApproval ? 'Processing Webhook...' : 'Simulate Instant Payment'}</span>
-                  </button>
-                </div>
-              )}
+              <div className="sm:text-right border-t sm:border-t-0 pt-2 sm:pt-0 border-neutral-200 dark:border-neutral-700">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-neutral-400 block">
+                  Total Amount Payable
+                </span>
+                <p className="text-2xl font-black text-[#F37021]">
+                  ₱{order.totalAmount.toLocaleString()}
+                </p>
+                <span className="text-[10px] text-neutral-400">Zero Gateway Fees</span>
+              </div>
             </div>
-          )}
 
-          {/* =========================================================================
-              BANK TRANSFER / INSTAPAY WORKFLOW
-              ========================================================================= */}
-          {selectedMethod === 'bank_transfer' && (
-            <div className="space-y-4">
-              {/* Bank Selector Tabs */}
-              <div className="flex items-center space-x-2 border-b border-neutral-200 dark:border-neutral-800 pb-2">
-                {COMMISSARY_BANK_ACCOUNTS.map((b, idx) => (
-                  <button
-                    key={b.shortName}
-                    type="button"
-                    onClick={() => setSelectedBankIndex(idx)}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${
-                      selectedBankIndex === idx
-                        ? 'bg-[#F37021] text-white shadow-xs'
-                        : 'bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400 hover:bg-neutral-200'
-                    }`}
+            {order.items.length > 0 && (
+              <div className="mt-3 pt-3 border-t border-neutral-200 dark:border-neutral-800 flex flex-wrap gap-1.5 text-[11px] text-neutral-600 dark:text-neutral-400">
+                {order.items.map((i, idx) => (
+                  <span
+                    key={idx}
+                    className="px-2 py-0.5 rounded-lg bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 font-medium"
                   >
-                    {b.shortName}
-                  </button>
+                    {i.quantity}x {i.productName}
+                  </span>
                 ))}
               </div>
+            )}
+          </div>
 
-              {/* Active Bank Card */}
-              <div className="p-4 rounded-2xl bg-neutral-50 dark:bg-neutral-800/50 border border-neutral-200 dark:border-neutral-700 text-xs space-y-2.5">
+          {/* Section 2: Payee Details (Central Commissary Corporate Accounts) */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <label className="block text-xs font-bold uppercase tracking-wider text-neutral-400">
+                Payee Channel Details:
+              </label>
+              <span className="text-[11px] text-neutral-500">
+                Select your transfer channel to view payee details
+              </span>
+            </div>
+
+            {/* Channel Tabs */}
+            <div className="grid grid-cols-3 gap-2">
+              <button
+                type="button"
+                onClick={() => setSelectedMethod('gcash')}
+                className={`p-3 rounded-2xl border text-left transition-all flex flex-col justify-between cursor-pointer ${
+                  selectedMethod === 'gcash'
+                    ? 'border-blue-500 bg-blue-50/50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-300 ring-2 ring-blue-500/20 font-bold shadow-xs'
+                    : 'border-neutral-200 dark:border-neutral-800 text-neutral-600 dark:text-neutral-400 hover:border-neutral-300 dark:hover:border-neutral-700'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <Smartphone className="w-4 h-4 text-blue-500" />
+                  {selectedMethod === 'gcash' && <span className="w-2 h-2 rounded-full bg-blue-500"></span>}
+                </div>
+                <div>
+                  <div className="text-xs font-bold">GCash</div>
+                  <div className="text-[10px] opacity-75">Corporate E-Wallet</div>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setSelectedMethod('maya')}
+                className={`p-3 rounded-2xl border text-left transition-all flex flex-col justify-between cursor-pointer ${
+                  selectedMethod === 'maya'
+                    ? 'border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-300 ring-2 ring-emerald-500/20 font-bold shadow-xs'
+                    : 'border-neutral-200 dark:border-neutral-800 text-neutral-600 dark:text-neutral-400 hover:border-neutral-300 dark:hover:border-neutral-700'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <Smartphone className="w-4 h-4 text-emerald-500" />
+                  {selectedMethod === 'maya' && <span className="w-2 h-2 rounded-full bg-emerald-500"></span>}
+                </div>
+                <div>
+                  <div className="text-xs font-bold">Maya</div>
+                  <div className="text-[10px] opacity-75">Corporate Wallet</div>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setSelectedMethod('bank_transfer')}
+                className={`p-3 rounded-2xl border text-left transition-all flex flex-col justify-between cursor-pointer ${
+                  selectedMethod === 'bank_transfer'
+                    ? 'border-[#F37021] bg-orange-50/50 dark:bg-orange-950/40 text-[#F37021] ring-2 ring-[#F37021]/20 font-bold shadow-xs'
+                    : 'border-neutral-200 dark:border-neutral-800 text-neutral-600 dark:text-neutral-400 hover:border-neutral-300 dark:hover:border-neutral-700'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <Building2 className="w-4 h-4 text-[#F37021]" />
+                  {selectedMethod === 'bank_transfer' && <span className="w-2 h-2 rounded-full bg-[#F37021]"></span>}
+                </div>
+                <div>
+                  <div className="text-xs font-bold">Bank Transfer</div>
+                  <div className="text-[10px] opacity-75">BDO / BPI / UB</div>
+                </div>
+              </button>
+            </div>
+
+            {/* Payee Details Display */}
+            {selectedMethod === 'gcash' && (
+              <div className="p-4 rounded-2xl bg-blue-50/40 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-900/60 text-xs space-y-3">
                 <div className="flex items-center justify-between">
-                  <span className="font-bold text-neutral-900 dark:text-white text-sm">
-                    {activeBank.bankName}
+                  <span className="font-bold text-blue-900 dark:text-blue-200">
+                    Official Central Commissary GCash Payee
                   </span>
-                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300">
-                    InstaPay & PESONet Enabled
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200">
+                    Verified Merchant
                   </span>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                   <div className="p-2.5 bg-white dark:bg-neutral-800 rounded-xl border border-neutral-200 dark:border-neutral-700">
                     <span className="text-[10px] text-neutral-400 uppercase font-semibold block">
-                      Account Name:
+                      Payee Account Name:
                     </span>
                     <span className="font-bold text-neutral-900 dark:text-white text-xs">
-                      {activeBank.accountName}
+                      {COMMISSARY_DIGITAL_WALLETS.gcash.merchantName}
                     </span>
                   </div>
 
                   <div className="p-2.5 bg-white dark:bg-neutral-800 rounded-xl border border-neutral-200 dark:border-neutral-700 flex items-center justify-between">
                     <div>
                       <span className="text-[10px] text-neutral-400 uppercase font-semibold block">
-                        Account Number:
+                        Mobile / Wallet Number:
                       </span>
                       <span className="font-mono font-bold text-neutral-900 dark:text-white text-sm">
-                        {activeBank.accountNumber}
+                        {COMMISSARY_DIGITAL_WALLETS.gcash.walletNumber}
                       </span>
                     </div>
                     <button
                       type="button"
-                      onClick={() => copyToClipboard(activeBank.accountNumber, 'acct')}
-                      className="p-1.5 rounded-lg bg-neutral-100 dark:bg-neutral-700 text-neutral-600 dark:text-neutral-300 hover:text-[#F37021]"
-                      title="Copy Account Number"
+                      onClick={() => copyToClipboard(COMMISSARY_DIGITAL_WALLETS.gcash.walletNumber, 'gcash_num')}
+                      className="p-1.5 rounded-lg bg-neutral-100 dark:bg-neutral-700 text-neutral-600 dark:text-neutral-300 hover:text-blue-600 cursor-pointer"
+                      title="Copy Mobile Number"
                     >
-                      {copiedField === 'acct' ? (
+                      {copiedField === 'gcash_num' ? (
                         <Check className="w-4 h-4 text-emerald-500" />
                       ) : (
                         <Copy className="w-4 h-4" />
@@ -691,159 +382,297 @@ export const BranchPaymentModal: React.FC<BranchPaymentModalProps> = ({
                   </div>
                 </div>
 
-                <p className="text-[11px] text-neutral-500">
-                  Branch: <strong>{activeBank.branch}</strong> • Include Order #{order.id} in transfer notes.
+                <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
+                  Transfer exact total of <strong>₱{order.totalAmount.toLocaleString()}</strong> to the mobile wallet above.
+                  Save a screenshot of the completed transfer slip with the 13-digit Reference Number.
                 </p>
               </div>
+            )}
 
-              {/* Demo Presets */}
-              <div>
-                <p className="text-[11px] font-bold uppercase text-neutral-400 mb-1.5">
-                  Select Demo Bank Slip Preset:
-                </p>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                  {SAMPLE_PAYMENT_PROOFS.map((preset, i) => (
+            {selectedMethod === 'maya' && (
+              <div className="p-4 rounded-2xl bg-emerald-50/40 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-900/60 text-xs space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-emerald-900 dark:text-emerald-200">
+                    Official Central Commissary Maya Payee
+                  </span>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 dark:bg-emerald-900 text-emerald-800 dark:text-emerald-200">
+                    Verified Business
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <div className="p-2.5 bg-white dark:bg-neutral-800 rounded-xl border border-neutral-200 dark:border-neutral-700">
+                    <span className="text-[10px] text-neutral-400 uppercase font-semibold block">
+                      Payee Account Name:
+                    </span>
+                    <span className="font-bold text-neutral-900 dark:text-white text-xs">
+                      {COMMISSARY_DIGITAL_WALLETS.maya.merchantName}
+                    </span>
+                  </div>
+
+                  <div className="p-2.5 bg-white dark:bg-neutral-800 rounded-xl border border-neutral-200 dark:border-neutral-700 flex items-center justify-between">
+                    <div>
+                      <span className="text-[10px] text-neutral-400 uppercase font-semibold block">
+                        Mobile / Account Number:
+                      </span>
+                      <span className="font-mono font-bold text-neutral-900 dark:text-white text-sm">
+                        {COMMISSARY_DIGITAL_WALLETS.maya.walletNumber}
+                      </span>
+                    </div>
                     <button
-                      key={i}
                       type="button"
-                      onClick={() => {
-                        setProofUrlInput(preset.url);
-                        setToastMessage({ type: 'info', text: `Loaded preset: ${preset.label}` });
-                      }}
-                      className={`p-2 rounded-xl border text-left text-xs transition-all ${
-                        proofUrlInput === preset.url
-                          ? 'border-[#F37021] bg-orange-50 dark:bg-orange-950/40 font-bold text-[#F37021]'
-                          : 'border-neutral-200 dark:border-neutral-800 hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-700 dark:text-neutral-300'
+                      onClick={() => copyToClipboard(COMMISSARY_DIGITAL_WALLETS.maya.walletNumber, 'maya_num')}
+                      className="p-1.5 rounded-lg bg-neutral-100 dark:bg-neutral-700 text-neutral-600 dark:text-neutral-300 hover:text-emerald-600 cursor-pointer"
+                      title="Copy Mobile Number"
+                    >
+                      {copiedField === 'maya_num' ? (
+                        <Check className="w-4 h-4 text-emerald-500" />
+                      ) : (
+                        <Copy className="w-4 h-4" />
+                      )}
+                    </button>
+                  </div>
+                </div>
+
+                <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
+                  Send exact total of <strong>₱{order.totalAmount.toLocaleString()}</strong> via Maya Send Money to the number above.
+                  Save a screenshot of the Maya payment receipt showing the Reference ID.
+                </p>
+              </div>
+            )}
+
+            {selectedMethod === 'bank_transfer' && (
+              <div className="space-y-3">
+                {/* Bank Sub-tabs */}
+                <div className="flex items-center space-x-2 border-b border-neutral-200 dark:border-neutral-800 pb-2">
+                  {COMMISSARY_BANK_ACCOUNTS.map((b, idx) => (
+                    <button
+                      key={b.shortName}
+                      type="button"
+                      onClick={() => setSelectedBankIndex(idx)}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+                        selectedBankIndex === idx
+                          ? 'bg-[#F37021] text-white shadow-xs'
+                          : 'bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400 hover:bg-neutral-200 dark:hover:bg-neutral-700'
                       }`}
                     >
-                      ✓ {preset.label}
+                      {b.shortName}
                     </button>
                   ))}
                 </div>
-              </div>
 
-              {/* Proof Image Upload / URL & Reference Input */}
-              <form onSubmit={handleManualProofSubmit} className="space-y-3 text-xs">
-                {/* File Upload / Dropzone */}
-                <div className="p-3.5 rounded-2xl border-2 border-dashed border-neutral-300 dark:border-neutral-700 bg-neutral-50/50 dark:bg-neutral-800/40 text-center space-y-2">
+                <div className="p-4 rounded-2xl bg-neutral-50 dark:bg-neutral-800/50 border border-neutral-200 dark:border-neutral-700 text-xs space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-neutral-900 dark:text-white text-sm">
+                      {activeBank.bankName}
+                    </span>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300">
+                      InstaPay & PESONet Enabled
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                    <div className="p-2.5 bg-white dark:bg-neutral-800 rounded-xl border border-neutral-200 dark:border-neutral-700">
+                      <span className="text-[10px] text-neutral-400 uppercase font-semibold block">
+                        Account Name:
+                      </span>
+                      <span className="font-bold text-neutral-900 dark:text-white text-xs">
+                        {activeBank.accountName}
+                      </span>
+                    </div>
+
+                    <div className="p-2.5 bg-white dark:bg-neutral-800 rounded-xl border border-neutral-200 dark:border-neutral-700 flex items-center justify-between">
+                      <div>
+                        <span className="text-[10px] text-neutral-400 uppercase font-semibold block">
+                          Account Number:
+                        </span>
+                        <span className="font-mono font-bold text-neutral-900 dark:text-white text-sm">
+                          {activeBank.accountNumber}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => copyToClipboard(activeBank.accountNumber, 'acct')}
+                        className="p-1.5 rounded-lg bg-neutral-100 dark:bg-neutral-700 text-neutral-600 dark:text-neutral-300 hover:text-[#F37021] cursor-pointer"
+                        title="Copy Account Number"
+                      >
+                        {copiedField === 'acct' ? (
+                          <Check className="w-4 h-4 text-emerald-500" />
+                        ) : (
+                          <Copy className="w-4 h-4" />
+                        )}
+                      </button>
+                    </div>
+                  </div>
+
+                  <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
+                    Branch: <strong>{activeBank.branch}</strong> • Include Order #{order.id} in transfer remarks/notes.
+                  </p>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Section 3: Submit Manual Proof of Payment Form */}
+          <form onSubmit={handleSubmitProof} className="space-y-4 pt-2 border-t border-neutral-200 dark:border-neutral-800">
+            <div>
+              <h4 className="text-xs font-bold uppercase tracking-wider text-neutral-700 dark:text-neutral-300">
+                Submit Manual Verification Proof:
+              </h4>
+              <p className="text-[11px] text-neutral-500">
+                Provide your manual transaction reference and upload the official transfer receipt.
+              </p>
+            </div>
+
+            {/* Field 1: Reference Number Input */}
+            <div>
+              <label className="block text-xs font-bold text-neutral-700 dark:text-neutral-300 mb-1">
+                Transaction Reference / Trace Number <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="text"
+                required
+                value={manualReference}
+                onChange={(e) => setManualReference(e.target.value)}
+                placeholder={
+                  selectedMethod === 'gcash'
+                    ? 'e.g. 20260908-189283 (13-digit GCash Ref)'
+                    : selectedMethod === 'maya'
+                    ? 'e.g. MY-20260908-9842 (Maya Ref ID)'
+                    : 'e.g. 20260908-BDO-84920 (InstaPay / Bank Trace)'
+                }
+                className="w-full px-3.5 py-2.5 text-xs bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-xl focus:ring-2 focus:ring-[#F37021] focus:outline-hidden font-mono text-neutral-900 dark:text-white"
+              />
+              <span className="text-[10px] text-neutral-400 mt-1 block">
+                Found on your transaction confirmation receipt screen.
+              </span>
+            </div>
+
+            {/* Field 2: Receipt Image Upload & Validation Dropzone */}
+            <div>
+              <label className="block text-xs font-bold text-neutral-700 dark:text-neutral-300 mb-1">
+                Receipt Proof of Payment (Image / PDF) <span className="text-red-500">*</span>
+              </label>
+
+              {!validatedFileInfo && !proofUrlInput ? (
+                <div className="p-4 rounded-2xl border-2 border-dashed border-neutral-300 dark:border-neutral-700 bg-neutral-50/60 dark:bg-neutral-800/40 text-center space-y-2">
                   <input
                     ref={fileInputRef}
                     type="file"
                     accept="image/png,image/jpeg,image/webp,application/pdf"
                     onChange={handleFileUpload}
                     className="hidden"
-                    id="branch-proof-file-input"
+                    id="branch-proof-upload-input"
                   />
                   <label
-                    htmlFor="branch-proof-file-input"
-                    className="cursor-pointer inline-flex items-center space-x-2 px-4 py-2 rounded-xl bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 text-neutral-800 dark:text-neutral-200 font-bold hover:bg-neutral-100 dark:hover:bg-neutral-700 shadow-2xs transition-all"
+                    htmlFor="branch-proof-upload-input"
+                    className="cursor-pointer inline-flex items-center space-x-2 px-4 py-2.5 rounded-xl bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 text-neutral-800 dark:text-neutral-200 font-bold hover:bg-neutral-100 dark:hover:bg-neutral-700 shadow-2xs transition-all text-xs"
                   >
                     <Upload className="w-4 h-4 text-[#F37021]" />
-                    <span>{isValidatingFile ? 'Scanning File...' : 'Upload Slip Image / PDF'}</span>
+                    <span>{isValidatingFile ? 'Scanning File Integrity...' : 'Upload Receipt Screenshot'}</span>
                   </label>
                   <p className="text-[11px] text-neutral-500">
-                    PNG, JPG, WebP, PDF up to 15MB • Binary magic-byte verified & script scanned
+                    PNG, JPG, WebP, or PDF up to 15MB • Scanned for binary safety & integrity
                   </p>
 
-                  {validatedFileInfo && (
-                    <div className="p-2 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-700 dark:text-emerald-300 text-[11px] font-semibold flex items-center justify-center space-x-1.5">
-                      <CheckCircle2 className="w-3.5 h-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
-                      <span>
-                        Verified Authentic: {validatedFileInfo.fileName} ({(validatedFileInfo.fileSize / 1024).toFixed(1)} KB)
-                      </span>
+                  <div className="pt-1">
+                    <button
+                      type="button"
+                      onClick={() => setShowUrlFallback(!showUrlFallback)}
+                      className="text-[11px] text-neutral-500 hover:text-[#F37021] underline cursor-pointer"
+                    >
+                      {showUrlFallback ? 'Hide URL input' : 'Or paste receipt image URL'}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="p-3.5 rounded-2xl border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-800/60 flex items-center justify-between gap-3">
+                  <div className="flex items-center space-x-3 overflow-hidden">
+                    {validatedFileInfo?.previewUrl ? (
+                      <img
+                        src={validatedFileInfo.previewUrl}
+                        alt="Receipt Preview"
+                        className="w-12 h-12 rounded-xl object-cover border border-neutral-200 dark:border-neutral-700 shrink-0"
+                      />
+                    ) : (
+                      <div className="w-12 h-12 rounded-xl bg-neutral-200 dark:bg-neutral-700 flex items-center justify-center shrink-0 text-[#F37021]">
+                        <FileText className="w-6 h-6" />
+                      </div>
+                    )}
+                    <div className="min-w-0">
+                      <div className="flex items-center space-x-1.5">
+                        <span className="text-xs font-bold text-neutral-900 dark:text-white truncate">
+                          {validatedFileInfo?.fileName || 'Receipt Image Attached'}
+                        </span>
+                        <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 flex items-center space-x-1">
+                          <Check className="w-2.5 h-2.5" />
+                          <span>Ready</span>
+                        </span>
+                      </div>
+                      {validatedFileInfo && (
+                        <p className="text-[10px] text-neutral-400">
+                          {(validatedFileInfo.fileSize / 1024).toFixed(1)} KB • {validatedFileInfo.mimeType}
+                        </p>
+                      )}
                     </div>
-                  )}
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                  <div>
-                    <label className="block font-bold uppercase tracking-wider text-neutral-400 mb-1">
-                      Bank Transfer Reference / Trace #
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      value={manualReference}
-                      onChange={(e) => setManualReference(e.target.value)}
-                      placeholder="e.g. 20260825-BDO-84920"
-                      className="w-full p-2.5 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white font-mono"
-                    />
                   </div>
-                  <div>
-                    <label className="block font-bold uppercase tracking-wider text-neutral-400 mb-1">
-                      Proof Screenshot URL / File Data
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      value={proofUrlInput}
-                      onChange={(e) => setProofUrlInput(e.target.value)}
-                      placeholder="Upload file above or paste URL (https://...)"
-                      className="w-full p-2.5 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white"
-                    />
-                  </div>
-                </div>
 
-                <div className="flex items-center justify-end space-x-2 pt-2">
                   <button
                     type="button"
-                    onClick={onClose}
-                    className="px-4 py-2 font-medium rounded-xl border border-neutral-300 dark:border-neutral-700 text-neutral-700 dark:text-neutral-300"
+                    onClick={handleRemoveFile}
+                    className="p-2 rounded-xl text-neutral-400 hover:text-red-500 hover:bg-red-500/10 transition-colors cursor-pointer shrink-0"
+                    title="Remove file"
                   >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={isValidatingFile || !proofUrlInput.trim()}
-                    className="px-5 py-2 font-bold rounded-xl bg-[#F37021] text-white hover:bg-[#d85e15] disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-1.5 shadow-sm"
-                  >
-                    <Upload className="w-4 h-4" />
-                    <span>Submit Transfer Proof to HQ</span>
+                    <Trash2 className="w-4 h-4" />
                   </button>
                 </div>
-              </form>
-            </div>
-          )}
+              )}
 
-          {/* =========================================================================
-              CASH ON DELIVERY / COMMISSARY TERMS WORKFLOW
-              ========================================================================= */}
-          {selectedMethod === 'cash' && (
-            <div className="space-y-4">
-              <div className="p-4 rounded-2xl bg-neutral-50 dark:bg-neutral-800/40 border border-neutral-200 dark:border-neutral-700 space-y-2 text-xs">
-                <div className="flex items-center space-x-2 font-bold text-neutral-900 dark:text-white">
-                  <Lock className="w-4 h-4 text-[#F37021]" />
-                  <span>Franchise Credit / Cash on Dispatch</span>
+              {/* Optional URL Input Fallback */}
+              {showUrlFallback && (
+                <div className="mt-2">
+                  <input
+                    type="text"
+                    value={proofUrlInput}
+                    onChange={(e) => setProofUrlInput(e.target.value)}
+                    placeholder="https://... (direct URL to receipt screenshot)"
+                    className="w-full px-3 py-2 text-xs bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-xl font-mono text-neutral-900 dark:text-white"
+                  />
                 </div>
-                <p className="text-neutral-600 dark:text-neutral-300">
-                  Payment will be collected by the Central Commissary Fleet Driver or verified at logistics turnover in accordance with franchise agreement guidelines.
+              )}
+            </div>
+
+            {/* Admin Audit Compliance Note */}
+            <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-xs flex items-start space-x-2.5">
+              <ShieldCheck className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+              <div className="text-[11px] text-amber-900 dark:text-amber-200">
+                <span className="font-bold">Manual Treasury Review Protocol:</span>
+                <p className="text-neutral-600 dark:text-neutral-300 mt-0.5">
+                  Your reference number and receipt image are forwarded to the Central Bicol Commissary Treasury Queue.
+                  HQ Admin will manually verify funds before unlocking MTO confectionery batching and J&T Express dispatch.
                 </p>
               </div>
-
-              <div className="flex items-center justify-end space-x-2 pt-2">
-                <button
-                  type="button"
-                  onClick={onClose}
-                  className="px-4 py-2 font-medium rounded-xl border border-neutral-300 dark:border-neutral-700 text-neutral-700 dark:text-neutral-300 text-xs"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    onPaymentComplete('TERMS_CASH_ON_DELIVERY', {
-                      paymentMethod: 'cash',
-                      status: 'PENDING',
-                      referenceNumber: `COD-${order.id}`,
-                    });
-                  }}
-                  className="px-5 py-2 font-bold rounded-xl bg-[#F37021] text-white hover:bg-[#d85e15] text-xs shadow-sm"
-                >
-                  Confirm Requisition on Credit / COD
-                </button>
-              </div>
             </div>
-          )}
+
+            {/* Form Action Buttons */}
+            <div className="flex items-center justify-end space-x-3 pt-2">
+              <button
+                type="button"
+                onClick={onClose}
+                className="px-4 py-2 text-xs font-semibold rounded-xl border border-neutral-300 dark:border-neutral-700 text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={isValidatingFile || !proofUrlInput.trim() || !manualReference.trim()}
+                className="px-5 py-2.5 text-xs font-bold rounded-xl bg-[#F37021] text-white hover:bg-[#d85e15] disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2 shadow-xs transition-all cursor-pointer"
+              >
+                <Upload className="w-4 h-4" />
+                <span>Submit Proof of Payment for Admin Review</span>
+              </button>
+            </div>
+          </form>
         </div>
       </div>
     </div>

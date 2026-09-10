@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useData } from '../../context/DataContext';
 import { Order, ProductionStage, DigitalPaymentMethod, PaymentGatewayStatus } from '../../types';
 import {
@@ -24,10 +24,16 @@ import {
   Building2,
   QrCode,
   AlertCircle,
+  ExternalLink,
+  Calendar,
+  PackageCheck,
 } from 'lucide-react';
 import { JTTrackingModal } from '../common/JTTrackingModal';
+import { JT_EXPRESS_TRACKING_URL } from '../../services/jtExpress';
 import { BranchPaymentModal } from './BranchPaymentModal';
 import { PackageCapacityWarningModal, PackageExceedWarningDetails } from './PackageCapacityWarningModal';
+import { usePackageUpgradeOptimization } from '../../hooks/usePackageUpgradeOptimization';
+import { PackageUpgradeCaution } from '../common/PackageUpgradeCaution';
 
 export interface PackageTier {
   id: 'silver' | 'gold' | 'platinum';
@@ -102,12 +108,6 @@ const STAGE_CONFIG: Record<ProductionStage, { label: string; icon: React.FC<{ cl
   },
 };
 
-const SAMPLE_PAYMENT_PROOFS = [
-  { label: 'BDO Online Transfer Receipt', url: 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?w=600&auto=format&fit=crop&q=80' },
-  { label: 'GCash Payment Confirmation', url: 'https://images.unsplash.com/photo-1554224154-26032ffc0d07?w=600&auto=format&fit=crop&q=80' },
-  { label: 'Bank Deposit Slip', url: 'https://images.unsplash.com/photo-1554224155-6726b3ff858f?w=600&auto=format&fit=crop&q=80' },
-];
-
 export const BranchOrders: React.FC = () => {
   const {
     products,
@@ -124,7 +124,6 @@ export const BranchOrders: React.FC = () => {
   const [selectedTierId, setSelectedTierId] = useState<'silver' | 'gold' | 'platinum'>('gold');
   const [quantities, setQuantities] = useState<Record<string, number>>({});
   const [selectedOrderForProof, setSelectedOrderForProof] = useState<Order | null>(null);
-  const [proofUrl, setProofUrl] = useState('');
   const [orderSuccessMsg, setOrderSuccessMsg] = useState<string | null>(null);
   const [historyTab, setHistoryTab] = useState<'all' | 'active' | 'completed'>('all');
   const [historySortBy, setHistorySortBy] = useState<'date_desc' | 'date_asc' | 'amount_desc' | 'amount_asc' | 'status'>('date_desc');
@@ -201,12 +200,57 @@ export const BranchOrders: React.FC = () => {
   const activeOrdersCount = branchOrders.filter((o) => !o.isArchived && o.status !== 'completed' && o.status !== 'rejected').length;
   const completedOrdersCount = branchOrders.filter((o) => o.isArchived || o.status === 'completed').length;
 
+  // Real-time Dispatched J&T Orders for Branch Manager Alert & Tracking
+  const dispatchedOrders = useMemo(() => {
+    return branchOrders.filter((ord) => {
+      const relDelivery = deliveries.find((d) => d.orderId === ord.id && d.status !== 'canceled');
+      const hasTracking = Boolean(ord.trackingNumber || ord.waybillNumber || relDelivery?.trackingNumber || relDelivery?.waybillNumber);
+      return (ord.status === 'dispatched' || ord.isDispatched || relDelivery?.status === 'inTransit' || relDelivery?.status === 'pending') && hasTracking;
+    });
+  }, [branchOrders, deliveries]);
+
   const [exceedWarning, setExceedWarning] = useState<PackageExceedWarningDetails | null>(null);
+  const [isUpgradeCautionDismissed, setIsUpgradeCautionDismissed] = useState(false);
 
   const currentTier = PACKAGE_TIERS.find((t) => t.id === selectedTierId) || PACKAGE_TIERS[1];
   const totalPacks = Object.values(quantities).reduce((sum, q) => sum + (q || 0), 0);
   const isBelowBase = totalPacks < currentTier.baseCapacity;
   const { totalPrice, isExceeded, excessPacks } = calculatePackagePrice(currentTier, totalPacks);
+
+  // Dynamic Package Upgrade / Cost-Optimization analysis
+  const upgradeAnalysis = usePackageUpgradeOptimization(selectedTierId, quantities);
+
+  // Re-enable caution banner whenever the quantity changes significantly or tier changes
+  const handleUpgradeToNextTier = (nextTierId: 'silver' | 'gold' | 'platinum') => {
+    const nextTier = PACKAGE_TIERS.find((t) => t.id === nextTierId);
+    if (!nextTier) return;
+
+    setSelectedTierId(nextTierId);
+    setIsUpgradeCautionDismissed(false);
+
+    // If total packs exceed next tier's base capacity, scale or reset excess items to fit cleanly
+    if (totalPacks > nextTier.baseCapacity) {
+      let remainingToKeep = nextTier.baseCapacity;
+      const adjusted: Record<string, number> = {};
+      for (const [pId, qty] of Object.entries(quantities)) {
+        if (remainingToKeep <= 0) {
+          adjusted[pId] = 0;
+        } else if (qty <= remainingToKeep) {
+          adjusted[pId] = qty;
+          remainingToKeep -= qty;
+        } else {
+          adjusted[pId] = remainingToKeep;
+          remainingToKeep = 0;
+        }
+      }
+      setQuantities(adjusted);
+    }
+
+    setOrderSuccessMsg(
+      `⚡ Switched to ${nextTier.name} Package! Base capacity of ${nextTier.baseCapacity} packs applied at ₱${nextTier.price.toLocaleString()} bulk rate.`
+    );
+    setTimeout(() => setOrderSuccessMsg(null), 6000);
+  };
 
   const isCapReached = totalPacks >= currentTier.maxCap;
   const remainingAllowedPacks = Math.max(0, currentTier.maxCap - totalPacks);
@@ -358,19 +402,8 @@ export const BranchOrders: React.FC = () => {
         `Package Order #${newOrd.id} (${newOrd.packageName}) created successfully! Please attach proof of payment below.`
       );
       setSelectedOrderForProof(newOrd);
-      setProofUrl(SAMPLE_PAYMENT_PROOFS[0].url);
       setTimeout(() => setOrderSuccessMsg(null), 6000);
     }
-  };
-
-  const handleUploadProofSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!selectedOrderForProof || !proofUrl.trim()) return;
-    uploadPaymentProof(selectedOrderForProof.id, proofUrl.trim());
-    setSelectedOrderForProof(null);
-    setProofUrl('');
-    setOrderSuccessMsg(`Proof of payment uploaded for Order #${selectedOrderForProof.id}`);
-    setTimeout(() => setOrderSuccessMsg(null), 4000);
   };
 
   return (
@@ -436,6 +469,15 @@ export const BranchOrders: React.FC = () => {
           );
         })}
       </div>
+
+      {/* Intelligent Package Upgrade / Cost-Optimization Caution Card */}
+      <PackageUpgradeCaution
+        analysis={upgradeAnalysis}
+        isDismissed={isUpgradeCautionDismissed}
+        onUpgrade={handleUpgradeToNextTier}
+        onDismiss={() => setIsUpgradeCautionDismissed(true)}
+        themeMode={themeMode as 'light' | 'dark'}
+      />
 
       {orderSuccessMsg && (
         <div className="p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-600 dark:text-emerald-400 text-xs font-bold flex items-center space-x-2">
@@ -613,6 +655,16 @@ export const BranchOrders: React.FC = () => {
 
         {/* Sticky Package Order Checkout Bar */}
         <div className="mt-6 pt-5 border-t border-neutral-200 dark:border-neutral-800 space-y-3">
+          {/* Also show caution here if manager is scrolled down near the checkout action */}
+          <PackageUpgradeCaution
+            analysis={upgradeAnalysis}
+            isDismissed={isUpgradeCautionDismissed}
+            onUpgrade={handleUpgradeToNextTier}
+            onDismiss={() => setIsUpgradeCautionDismissed(true)}
+            themeMode={themeMode as 'light' | 'dark'}
+            compact
+          />
+
           {isBelowBase && (
             <div className="p-3 rounded-2xl bg-amber-500/15 border border-amber-500/30 text-amber-800 dark:text-amber-300 text-xs font-semibold flex items-center space-x-2">
               <AlertCircle className="w-4 h-4 shrink-0 text-amber-600 dark:text-amber-400" />
@@ -696,6 +748,131 @@ export const BranchOrders: React.FC = () => {
             ))}
           </div>
         </div>
+
+        {/* Real-time Dispatched Consignments Alert Banner for Branch Manager */}
+        {dispatchedOrders.length > 0 && (
+          <div className="p-4 sm:p-5 rounded-2xl bg-linear-to-r from-red-500/10 via-amber-500/10 to-[#F37021]/10 border-2 border-red-500/30 space-y-3.5 shadow-xs">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div className="flex items-center space-x-3">
+                <div className="px-2.5 py-1 rounded-xl bg-red-600 text-white font-black text-xs shadow-xs flex items-center justify-center tracking-wider">
+                  J&T EXPRESS
+                </div>
+                <div>
+                  <h3 className="text-sm font-black text-neutral-900 dark:text-white flex items-center space-x-2">
+                    <span>Active Dispatched Consignments ({dispatchedOrders.length})</span>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-red-500/20 text-red-700 dark:text-red-400">
+                      IN TRANSIT
+                    </span>
+                  </h3>
+                  <p className="text-xs text-neutral-600 dark:text-neutral-400">
+                    Real-time physical waybill tracking and delivery schedules from Central Commissary.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {dispatchedOrders.map((ord) => {
+                const relDelivery = deliveries.find((d) => d.orderId === ord.id && d.status !== 'canceled');
+                const trackNo = ord.trackingNumber || ord.waybillNumber || relDelivery?.trackingNumber || relDelivery?.waybillNumber || '';
+                const etd = ord.estimatedDeliveryTime || relDelivery?.estimatedDeliveryTime;
+                const totalItems = ord.dispatchedProducts?.length
+                  ? ord.dispatchedProducts.reduce((s, it) => s + it.quantity, 0)
+                  : ord.items?.reduce((s, it) => s + it.quantity, 0) || 0;
+
+                const formatETD = (val?: string) => {
+                  if (!val) return null;
+                  try {
+                    const d = new Date(val);
+                    if (isNaN(d.getTime())) return val;
+                    return d.toLocaleString([], {
+                      month: 'short',
+                      day: 'numeric',
+                      year: 'numeric',
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    });
+                  } catch {
+                    return val;
+                  }
+                };
+
+                const formattedETD = formatETD(etd);
+
+                return (
+                  <div
+                    key={ord.id}
+                    className="p-4 rounded-xl bg-white dark:bg-[#181818] border border-neutral-200 dark:border-neutral-800 shadow-xs flex flex-col justify-between space-y-3"
+                  >
+                    <div className="space-y-2">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-center space-x-2">
+                          <span className="px-2 py-0.5 rounded text-[10px] font-black bg-red-600 text-white">
+                            J&T EXPRESS
+                          </span>
+                          <span className="text-xs font-bold text-neutral-900 dark:text-white">
+                            Order #{ord.id}
+                          </span>
+                          {ord.packageName && (
+                            <span className="text-[10px] font-bold text-[#F37021] bg-[#F37021]/10 px-1.5 py-0.5 rounded border border-[#F37021]/20">
+                              {ord.packageName}
+                            </span>
+                          )}
+                        </div>
+                        <span className="text-xs font-black text-emerald-600 dark:text-emerald-400 shrink-0">
+                          {totalItems} packs
+                        </span>
+                      </div>
+
+                      {/* Required explicit notification message */}
+                      <div className="p-2.5 rounded-lg bg-red-500/5 border border-red-500/15 text-xs text-neutral-800 dark:text-neutral-200 font-medium leading-relaxed">
+                        Your order #{ord.id} has been dispatched via J&T Express! Tracking No:{' '}
+                        <span className="font-mono font-black text-red-600 dark:text-red-400 select-all">
+                          {trackNo}
+                        </span>
+                      </div>
+
+                      {formattedETD && (
+                        <div className="text-[11px] text-neutral-600 dark:text-neutral-300 flex items-center space-x-1.5">
+                          <Clock className="w-3.5 h-3.5 text-[#F37021]" />
+                          <span>
+                            Estimated Time of Delivery (ETD):{' '}
+                            <strong className="text-neutral-900 dark:text-white font-bold">{formattedETD}</strong>
+                          </span>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="flex items-center justify-between gap-2 pt-2 border-t border-neutral-100 dark:border-neutral-800">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveTrackingNumber(trackNo);
+                          setActiveTrackingOrderId(ord.id);
+                        }}
+                        className="text-xs font-bold text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-white flex items-center space-x-1 cursor-pointer"
+                      >
+                        <Zap className="w-3.5 h-3.5 text-amber-500" />
+                        <span>View Timeline</span>
+                      </button>
+
+                      <a
+                        href={JT_EXPRESS_TRACKING_URL}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-3 py-1.5 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs font-bold transition-all flex items-center space-x-1.5 shadow-xs"
+                        title="Track package on J&T Official Portal"
+                      >
+                        <span>Track on J&T Portal</span>
+                        <ExternalLink className="w-3.5 h-3.5" />
+                      </a>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {/* Search & Sort Controls */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
@@ -815,10 +992,10 @@ export const BranchOrders: React.FC = () => {
                     {ord.status === 'pending' && (
                       <button
                         onClick={() => setSelectedOrderForProof(ord)}
-                        className="px-3.5 py-2 rounded-xl bg-gradient-to-r from-[#F37021] to-orange-600 text-white text-xs font-bold hover:opacity-90 transition-all flex items-center space-x-1.5 shadow-xs"
+                        className="px-3.5 py-2 rounded-xl bg-[#F37021] hover:bg-[#d85e15] text-white text-xs font-bold transition-all flex items-center space-x-1.5 shadow-xs cursor-pointer"
                       >
-                        <QrCode className="w-3.5 h-3.5" />
-                        <span>Pay with GCash / Maya / Bank</span>
+                        <Upload className="w-3.5 h-3.5" />
+                        <span>Submit Proof of Payment</span>
                       </button>
                     )}
 
@@ -862,58 +1039,118 @@ export const BranchOrders: React.FC = () => {
                     ord.dispatchMethod === 'jt_express';
 
                   const trackingNo = relDelivery?.waybillNumber || relDelivery?.trackingNumber || ord.trackingNumber;
+                  const etd = ord.estimatedDeliveryTime || relDelivery?.estimatedDeliveryTime;
 
                   if (!relDelivery && !trackingNo && !ord.isDispatched) return null;
 
+                  const formatETD = (etdVal?: string) => {
+                    if (!etdVal) return null;
+                    try {
+                      const d = new Date(etdVal);
+                      if (isNaN(d.getTime())) return etdVal;
+                      return d.toLocaleString([], {
+                        month: 'short',
+                        day: 'numeric',
+                        year: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      });
+                    } catch {
+                      return etdVal;
+                    }
+                  };
+
+                  const formattedETD = formatETD(etd);
+
                   return (
-                    <div className="pt-3 border-t border-neutral-100 dark:border-neutral-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 p-3 rounded-2xl bg-neutral-50 dark:bg-neutral-900/50">
-                      <div className="flex flex-wrap items-center gap-2">
-                        {isJT ? (
-                          <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-red-600 text-white flex items-center space-x-1">
-                            <span>J&T EXPRESS</span>
+                    <div className="pt-3 border-t border-neutral-100 dark:border-neutral-800 space-y-2 p-3.5 rounded-2xl bg-neutral-50 dark:bg-neutral-900/50 border border-neutral-200/60 dark:border-neutral-800/80">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span
+                            className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase ${
+                              relDelivery?.dispatchMethod === 'company_driver'
+                                ? 'bg-[#F37021] text-white'
+                                : 'bg-sky-600 text-white'
+                            }`}
+                          >
+                            {relDelivery?.dispatchMethod === 'company_driver' ? 'IN-HOUSE FLEET' : relDelivery?.courierName || 'COURIER'}
                           </span>
-                        ) : (
-                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#80C7F2]/20 text-[#1a7bb5] dark:text-[#80C7F2] border border-[#80C7F2]/30 flex items-center space-x-1">
-                            <Truck className="w-3 h-3" />
-                            <span>IN-HOUSE FLEET</span>
+
+                          {trackingNo && (
+                            <div className="flex items-center space-x-1.5">
+                              <span className="text-[11px] text-neutral-500 font-medium">Waybill:</span>
+                              <span className="font-mono text-xs font-black px-2 py-0.5 rounded-lg bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 text-neutral-900 dark:text-neutral-100 select-all">
+                                {trackingNo}
+                              </span>
+                            </div>
+                          )}
+
+                          <span
+                            className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                              relDelivery?.status === 'delivered'
+                                ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
+                                : relDelivery?.status === 'inTransit'
+                                ? 'bg-sky-500/15 text-sky-600 dark:text-sky-400'
+                                : 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
+                            }`}
+                          >
+                            {relDelivery?.status === 'inTransit'
+                              ? 'In Transit'
+                              : relDelivery?.status === 'delivered'
+                              ? 'Delivered'
+                              : 'Dispatched from Commissary'}
                           </span>
-                        )}
+                        </div>
 
                         {trackingNo && (
-                          <span className="font-mono text-xs font-bold text-neutral-700 dark:text-neutral-300">
-                            {trackingNo}
-                          </span>
-                        )}
+                          <div className="flex items-center space-x-2 self-start sm:self-auto">
+                            {isJT && (
+                              <a
+                                href={JT_EXPRESS_TRACKING_URL}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="px-3 py-1.5 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs font-bold transition-all flex items-center space-x-1.5 shadow-xs"
+                                title="Track package on J&T Official Portal"
+                              >
+                                <span>Carrier Portal</span>
+                                <ExternalLink className="w-3.5 h-3.5" />
+                              </a>
+                            )}
 
-                        <span
-                          className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                            relDelivery?.status === 'delivered'
-                              ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
-                              : relDelivery?.status === 'inTransit'
-                              ? 'bg-sky-500/15 text-sky-600 dark:text-sky-400'
-                              : 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
-                          }`}
-                        >
-                          {relDelivery?.status === 'inTransit'
-                            ? 'In Transit'
-                            : relDelivery?.status === 'delivered'
-                            ? 'Delivered'
-                            : 'Dispatched from Commissary'}
-                        </span>
+                            <button
+                              onClick={() => {
+                                setActiveTrackingNumber(trackingNo);
+                                setActiveTrackingOrderId(ord.id);
+                              }}
+                              className="px-3 py-1.5 rounded-xl bg-neutral-200 dark:bg-neutral-800 hover:bg-neutral-300 dark:hover:bg-neutral-700 text-neutral-800 dark:text-neutral-200 text-xs font-bold transition-all flex items-center space-x-1.5 cursor-pointer"
+                            >
+                              <Truck className="w-3.5 h-3.5 text-[#F37021]" />
+                              <span>Delivery Details</span>
+                            </button>
+                          </div>
+                        )}
                       </div>
 
-                      {trackingNo && (
-                        <button
-                          onClick={() => {
-                            setActiveTrackingNumber(trackingNo);
-                            setActiveTrackingOrderId(ord.id);
-                          }}
-                          className="px-3 py-1.5 rounded-xl bg-red-600/10 hover:bg-red-600/20 text-red-600 dark:text-red-400 border border-red-500/30 text-xs font-bold transition-all flex items-center space-x-1.5 self-start sm:self-auto"
-                        >
-                          <Zap className="w-3.5 h-3.5" />
-                          <span>Track Real-Time Status</span>
-                        </button>
-                      )}
+                      {/* Additional Delivery Manifest Info: ETD & Dispatched Products */}
+                      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 pt-1 text-[11px] border-t border-neutral-200/50 dark:border-neutral-800/60">
+                        {formattedETD && (
+                          <div className="flex items-center space-x-1.5 text-neutral-600 dark:text-neutral-300">
+                            <Clock className="w-3.5 h-3.5 text-[#F37021]" />
+                            <span>
+                              Estimated Time of Delivery (ETD): <strong className="text-neutral-900 dark:text-white font-bold">{formattedETD}</strong>
+                            </span>
+                          </div>
+                        )}
+
+                        {ord.dispatchedProducts && ord.dispatchedProducts.length > 0 && (
+                          <div className="flex items-center space-x-1.5 text-neutral-600 dark:text-neutral-300">
+                            <PackageCheck className="w-3.5 h-3.5 text-emerald-500" />
+                            <span>
+                              Confirmed Consignment: <strong className="text-neutral-900 dark:text-white font-bold">{ord.dispatchedProducts.reduce((s, it) => s + it.quantity, 0)} Units</strong>
+                            </span>
+                          </div>
+                        )}
+                      </div>
                     </div>
                   );
                 })()}

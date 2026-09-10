@@ -574,6 +574,9 @@ interface DataContextType {
       receiverContact?: string;
       receiverPhone?: string;
       weightKg?: number;
+      estimatedDeliveryTime?: string;
+      dispatchedProducts?: OrderItem[];
+      clientRequestId?: string;
     }
   ) => Delivery;
   updateDeliveryStatus: (deliveryId: string, status: DeliveryStatus, deliveredAt?: string) => void;
@@ -765,7 +768,11 @@ interface DataContextType {
   addManualSalesToDailyLog: (salesList: { productId: string; productName: string; flavor: string; unitsSold: number; unitPrice: number }[]) => { success: boolean; error?: string };
   addPhysicalCountsToDailyLog: (counts: DailyPhysicalCountItem[]) => { success: boolean; error?: string };
   addSpoilageToDailyLog: (spoilage: Omit<DailySpoilageItem, 'id'>) => { success: boolean; error?: string };
-  addInboundToDailyLog: (receiving: Omit<DailyInboundReceivingItem, 'id' | 'verifiedAt'>) => { success: boolean; error?: string };
+  removeSpoilageFromDailyLog: (spoilageId: string) => { success: boolean; error?: string };
+  addInboundToDailyLog: (receiving: Omit<DailyInboundReceivingItem, 'id' | 'verifiedAt'> | Array<Omit<DailyInboundReceivingItem, 'id' | 'verifiedAt'>>) => { success: boolean; error?: string };
+  removeInboundFromDailyLog: (inboundId: string) => { success: boolean; error?: string };
+  removeInboundManifestFromDailyLog: (manifestNumber: string) => { success: boolean; error?: string };
+  rejectAndReturnDailyLog: (logId: string, reason: string) => { success: boolean; error?: string };
   createInterBranchTransfer: (data: Omit<InterBranchTransfer, 'id' | 'createdAt'>) => { success: boolean; error?: string };
   updateTransferStatus: (transferId: string, status: InterBranchTransfer['status']) => void;
   updateProductPricing: (productId: string, price: number, wholesalePrice?: number) => { success: boolean; error?: string };
@@ -2711,6 +2718,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       receiverContact?: string;
       receiverPhone?: string;
       weightKg?: number;
+      estimatedDeliveryTime?: string;
+      dispatchedProducts?: OrderItem[];
       clientRequestId?: string;
     }
   ): Delivery => {
@@ -2760,14 +2769,23 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       // Mark order as dispatched and update productionStage to ready_for_dispatch
       if (order) {
+        const dispatchTimestamp = new Date().toISOString();
         const updatedOrder: Order = {
           ...order,
           status: 'dispatched',
           productionStage: 'ready_for_dispatch',
           isDispatched: true,
           dispatchMethod: newDelivery.dispatchMethod,
+          courierName: newDelivery.courierName,
+          driverName: extra?.driverName,
+          driverPhone: extra?.driverPhone,
+          vehiclePlateNo: extra?.vehiclePlateNo,
           waybillNumber: newDelivery.waybillNumber,
           trackingNumber: newDelivery.trackingNumber,
+          estimatedDeliveryTime: extra?.estimatedDeliveryTime || scheduledAt || order.estimatedDeliveryTime,
+          dispatchedProducts: extra?.dispatchedProducts || order.items,
+          dispatchedAt: dispatchTimestamp,
+          dispatchNotes: notes,
         };
         setOrders((prev) => prev.map((o) => (o.id === orderId ? updatedOrder : o)));
         firestoreSync.saveDoc('orders', orderId, updatedOrder);
@@ -2777,20 +2795,24 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       firestoreSync.saveDoc('deliveries', newDelivery.id, { ...newDelivery, clientRequestId: reqId });
 
       // Automatically broadcast notification for dispatched order
+      const etdNote = extra?.estimatedDeliveryTime ? ` (ETD: ${extra.estimatedDeliveryTime})` : '';
+      const notifText = `Your order #${orderId} has been dispatched via ${newDelivery.courierName}! Tracking / Ref: ${newDelivery.trackingNumber}${etdNote}`;
+
       const dispatchAnn: Announcement = {
         id: `ann-dispatch-${orderId}-${Date.now()}`,
         title: `🚚 Order #${orderId} Dispatched for Delivery`,
-        message: `Order #${orderId} ${order ? `for ${order.branchName}` : ''} has been dispatched via ${newDelivery.courierName} (Waybill / Tracking: ${newDelivery.trackingNumber}).`,
+        message: notifText,
         createdAt: new Date().toISOString(),
         kind: 'logistics',
         priority: 'urgent',
         scope: 'branch',
         targetBranchId: order?.branchId,
         targetBranchName: order?.branchName || 'Branch',
-        targetAudience: ['admin', 'branch_manager'],
+        targetAudience: ['branch_manager', 'cashier', 'admin'],
         authorName: currentUser?.name || 'Central Logistics Fleet',
-        authorRole: 'Logistics Officer',
-        actionUrl: 'orders',
+        authorRole: 'HQ Super Admin',
+        actionUrl: 'requisitions',
+        readBy: [],
       };
       setAnnouncements((prev) => [dispatchAnn, ...prev.filter((a) => a.id !== dispatchAnn.id)]);
       firestoreSync.saveDoc('announcements', dispatchAnn.id, dispatchAnn);
@@ -4825,6 +4847,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
           ? {
               ...l,
               status: DailyLogStatus.PENDING_VALIDATION,
+              submittedBy: currentUser?.name || l.submittedBy || 'Frontline Staff',
+              submittedById: currentUser?.id || l.submittedById || 'staff-1',
               submittedAt: new Date().toISOString(),
               updatedAt: new Date().toISOString(),
             }
@@ -4833,7 +4857,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     });
 
     return { success, error };
-  }, []);
+  }, [currentUser]);
 
   const validateAndLockDailyLog = useCallback(
     (logId: string, managerNotes?: string) => {
@@ -4879,6 +4903,56 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     [currentUser]
   );
 
+  const rejectAndReturnDailyLog = useCallback(
+    (logId: string, reason: string) => {
+      if (currentUser && (currentUser.role === Role.BRANCH_STAFF || currentUser.role === 'BRANCH_STAFF')) {
+        return {
+          success: false,
+          error: 'Access Denied: Only Branch Managers and Admins can reject and return shift logs.',
+        };
+      }
+
+      if (!reason || !reason.trim()) {
+        return {
+          success: false,
+          error: 'Please provide a clear disapproval reason or revision instructions for frontline staff.',
+        };
+      }
+
+      let success = false;
+      let error: string | undefined;
+
+      setDailyShiftLogs((prev) => {
+        const target = prev.find((l) => l.id === logId);
+        if (!target) {
+          error = 'Daily shift log not found.';
+          return prev;
+        }
+        if (target.status === DailyLogStatus.VALIDATED_AND_LOCKED) {
+          error = 'Locked shift logs cannot be rejected. Contact HQ Admin for security unlock procedures.';
+          return prev;
+        }
+        success = true;
+        return prev.map((l) =>
+          l.id === logId
+            ? {
+                ...l,
+                status: DailyLogStatus.RETURNED_FOR_REVISION,
+                rejectionReason: reason.trim(),
+                rejectedBy: currentUser?.name || 'Branch Manager',
+                rejectedAt: new Date().toISOString(),
+                managerNotes: `Returned for revision: ${reason.trim()}`,
+                updatedAt: new Date().toISOString(),
+              }
+            : l
+        );
+      });
+
+      return { success, error };
+    },
+    [currentUser]
+  );
+
   const addManualSalesToDailyLog = useCallback(
     (salesList: { productId: string; productName: string; flavor: string; unitsSold: number; unitPrice: number }[]) => {
       const branchId = currentUser?.branchId || 'b-legazpi';
@@ -4886,25 +4960,30 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       setDailyShiftLogs((prev) => {
         const existing = prev.find((l) => l.branchId === branchId && l.date === today);
+        const updatedSales: DailyManualSalesItem[] = salesList.map((s, idx) => ({
+          id: `ms-${Date.now()}-${idx}`,
+          productId: s.productId,
+          productName: s.productName,
+          flavor: s.flavor,
+          unitsSold: s.unitsSold,
+          unitPrice: s.unitPrice,
+          totalAmount: s.unitsSold * s.unitPrice,
+          loggedAt: new Date().toISOString(),
+        }));
+        const totalSalesUnits = updatedSales.reduce((sum, item) => sum + item.unitsSold, 0);
+        const totalSalesRevenue = updatedSales.reduce((sum, item) => sum + item.totalAmount, 0);
+
         if (existing) {
           if (existing.status === DailyLogStatus.VALIDATED_AND_LOCKED) {
             return prev;
           }
-          const updatedSales: DailyManualSalesItem[] = salesList.map((s, idx) => ({
-            id: `ms-${Date.now()}-${idx}`,
-            productId: s.productId,
-            productName: s.productName,
-            flavor: s.flavor,
-            unitsSold: s.unitsSold,
-            unitPrice: s.unitPrice,
-            totalAmount: s.unitsSold * s.unitPrice,
-            loggedAt: new Date().toISOString(),
-          }));
           return prev.map((l) =>
-            l.id === existing!.id
+            l.id === existing.id
               ? {
                   ...l,
-                  manualSales: [...l.manualSales, ...updatedSales],
+                  manualSales: updatedSales,
+                  totalSalesUnits,
+                  totalSalesRevenue,
                   updatedAt: new Date().toISOString(),
                 }
               : l
@@ -4920,18 +4999,13 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             submittedByStaffId: currentUser?.id || 'staff',
             submittedByStaffName: currentUser?.name || 'Staff',
             physicalCounts: [],
-            manualSales: salesList.map((s, idx) => ({
-              id: `ms-${Date.now()}-${idx}`,
-              productId: s.productId,
-              productName: s.productName,
-              flavor: s.flavor,
-              unitsSold: s.unitsSold,
-              unitPrice: s.unitPrice,
-              totalAmount: s.unitsSold * s.unitPrice,
-              loggedAt: new Date().toISOString(),
-            })),
+            manualSales: updatedSales,
             spoilageEntries: [],
             inboundReceiving: [],
+            totalSalesUnits,
+            totalSalesRevenue,
+            totalSpoilageUnits: 0,
+            totalSpoilageCost: 0,
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
           };
@@ -4953,7 +5027,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (existing) {
           if (existing.status === DailyLogStatus.VALIDATED_AND_LOCKED) return prev;
           return prev.map((l) =>
-            l.id === existing!.id
+            l.id === existing.id
               ? { ...l, physicalCounts: counts, updatedAt: new Date().toISOString() }
               : l
           );
@@ -4971,6 +5045,10 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             manualSales: [],
             spoilageEntries: [],
             inboundReceiving: [],
+            totalSalesUnits: 0,
+            totalSalesRevenue: 0,
+            totalSpoilageUnits: 0,
+            totalSpoilageCost: 0,
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
           };
@@ -4995,11 +5073,16 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const existing = prev.find((l) => l.branchId === branchId && l.date === today);
         if (existing) {
           if (existing.status === DailyLogStatus.VALIDATED_AND_LOCKED) return prev;
+          const updatedSpoilage = [...existing.spoilageEntries, newEntry];
+          const totalSpoilageUnits = updatedSpoilage.reduce((sum, item) => sum + item.quantity, 0);
+          const totalSpoilageCost = updatedSpoilage.reduce((sum, item) => sum + item.costImpact, 0);
           return prev.map((l) =>
-            l.id === existing!.id
+            l.id === existing.id
               ? {
                   ...l,
-                  spoilageEntries: [...l.spoilageEntries, newEntry],
+                  spoilageEntries: updatedSpoilage,
+                  totalSpoilageUnits,
+                  totalSpoilageCost,
                   updatedAt: new Date().toISOString(),
                 }
               : l
@@ -5018,6 +5101,10 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             manualSales: [],
             spoilageEntries: [newEntry],
             inboundReceiving: [],
+            totalSalesUnits: 0,
+            totalSalesRevenue: 0,
+            totalSpoilageUnits: newEntry.quantity,
+            totalSpoilageCost: newEntry.costImpact,
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
           };
@@ -5029,15 +5116,48 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     [currentUser, currentBranch]
   );
 
-  const addInboundToDailyLog = useCallback(
-    (receiving: Omit<DailyInboundReceivingItem, 'id' | 'verifiedAt'>) => {
+  const removeSpoilageFromDailyLog = useCallback(
+    (spoilageId: string) => {
       const branchId = currentUser?.branchId || 'b-legazpi';
       const today = new Date().toISOString().split('T')[0];
-      const newEntry: DailyInboundReceivingItem = {
-        id: `inbound-${Date.now()}`,
-        ...receiving,
-        verifiedAt: new Date().toISOString(),
-      };
+
+      setDailyShiftLogs((prev) => {
+        const existing = prev.find((l) => l.branchId === branchId && l.date === today);
+        if (!existing || existing.status === DailyLogStatus.VALIDATED_AND_LOCKED) return prev;
+
+        const updatedSpoilage = (existing.spoilageEntries || []).filter((s) => s.id !== spoilageId);
+        const totalSpoilageUnits = updatedSpoilage.reduce((sum, item) => sum + item.quantity, 0);
+        const totalSpoilageCost = updatedSpoilage.reduce((sum, item) => sum + item.costImpact, 0);
+
+        return prev.map((l) =>
+          l.id === existing.id
+            ? {
+                ...l,
+                spoilageEntries: updatedSpoilage,
+                totalSpoilageUnits,
+                totalSpoilageCost,
+                updatedAt: new Date().toISOString(),
+              }
+            : l
+        );
+      });
+      return { success: true };
+    },
+    [currentUser]
+  );
+
+  const addInboundToDailyLog = useCallback(
+    (receiving: Omit<DailyInboundReceivingItem, 'id' | 'verifiedAt'> | Array<Omit<DailyInboundReceivingItem, 'id' | 'verifiedAt'>>) => {
+      const branchId = currentUser?.branchId || 'b-legazpi';
+      const today = new Date().toISOString().split('T')[0];
+      const itemsList = Array.isArray(receiving) ? receiving : [receiving];
+      const now = new Date().toISOString();
+
+      const newEntries: DailyInboundReceivingItem[] = itemsList.map((item, idx) => ({
+        id: `inbound-${Date.now()}-${idx}`,
+        ...item,
+        verifiedAt: now,
+      }));
 
       setDailyShiftLogs((prev) => {
         const existing = prev.find((l) => l.branchId === branchId && l.date === today);
@@ -5047,8 +5167,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             l.id === existing!.id
               ? {
                   ...l,
-                  inboundReceiving: [...l.inboundReceiving, newEntry],
-                  updatedAt: new Date().toISOString(),
+                  inboundReceiving: [...l.inboundReceiving, ...newEntries],
+                  updatedAt: now,
                 }
               : l
           );
@@ -5065,9 +5185,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             physicalCounts: [],
             manualSales: [],
             spoilageEntries: [],
-            inboundReceiving: [newEntry],
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
+            inboundReceiving: newEntries,
+            createdAt: now,
+            updatedAt: now,
           };
           return [newLog, ...prev];
         }
@@ -5075,6 +5195,58 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return { success: true };
     },
     [currentUser, currentBranch]
+  );
+
+  const removeInboundFromDailyLog = useCallback(
+    (inboundId: string) => {
+      const branchId = currentUser?.branchId || 'b-legazpi';
+      const today = new Date().toISOString().split('T')[0];
+
+      setDailyShiftLogs((prev) => {
+        const existing = prev.find((l) => l.branchId === branchId && l.date === today);
+        if (!existing || existing.status === DailyLogStatus.VALIDATED_AND_LOCKED) return prev;
+
+        const updatedInbound = (existing.inboundReceiving || []).filter((item) => item.id !== inboundId);
+
+        return prev.map((l) =>
+          l.id === existing.id
+            ? {
+                ...l,
+                inboundReceiving: updatedInbound,
+                updatedAt: new Date().toISOString(),
+              }
+            : l
+        );
+      });
+      return { success: true };
+    },
+    [currentUser]
+  );
+
+  const removeInboundManifestFromDailyLog = useCallback(
+    (manifestNumber: string) => {
+      const branchId = currentUser?.branchId || 'b-legazpi';
+      const today = new Date().toISOString().split('T')[0];
+
+      setDailyShiftLogs((prev) => {
+        const existing = prev.find((l) => l.branchId === branchId && l.date === today);
+        if (!existing || existing.status === DailyLogStatus.VALIDATED_AND_LOCKED) return prev;
+
+        const updatedInbound = (existing.inboundReceiving || []).filter((item) => item.manifestNumber !== manifestNumber);
+
+        return prev.map((l) =>
+          l.id === existing.id
+            ? {
+                ...l,
+                inboundReceiving: updatedInbound,
+                updatedAt: new Date().toISOString(),
+              }
+            : l
+        );
+      });
+      return { success: true };
+    },
+    [currentUser]
   );
 
   const createInterBranchTransfer = useCallback(
@@ -5307,10 +5479,14 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         saveDailyLogDraft,
         submitDailyLogForValidation,
         validateAndLockDailyLog,
+        rejectAndReturnDailyLog,
         addManualSalesToDailyLog,
         addPhysicalCountsToDailyLog,
         addSpoilageToDailyLog,
+        removeSpoilageFromDailyLog,
         addInboundToDailyLog,
+        removeInboundFromDailyLog,
+        removeInboundManifestFromDailyLog,
         createInterBranchTransfer,
         updateTransferStatus,
         updateProductPricing,

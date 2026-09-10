@@ -16,6 +16,7 @@ import {
   PackageCheck,
   Trash2,
   ClipboardCheck,
+  FileCheck,
   ShieldCheck,
   Store,
   MapPin,
@@ -110,12 +111,41 @@ export const Sidebar: React.FC<SidebarProps> = ({
     ).length;
   }, [dailyShiftLogs, currentUser, currentBranch]);
 
+  // Current shift status for branch staff badge
+  const today = new Date().toISOString().split('T')[0];
+  const staffShiftStatus = useMemo(() => {
+    const bId = currentUser?.branchId || currentBranch?.id || 'b-legazpi';
+    const log = (dailyShiftLogs || []).find((l) => l.branchId === bId && l.date === today);
+    return log?.status || DailyLogStatus.DRAFT;
+  }, [dailyShiftLogs, currentUser, currentBranch, today]);
+
   // 1. BRANCH_STAFF Navigation: Render ONLY Frontline Tabs
   const staffTabs = [
     { id: 'physical_counts', label: 'Daily Physical Counts', icon: ClipboardCheck },
     { id: 'manual_sales', label: 'Manual Sales Entry', icon: Receipt },
     { id: 'spoilage_wastage', label: 'Spoilage / Wastage', icon: Trash2 },
     { id: 'inbound_receiving', label: 'Inbound Receiving', icon: PackageCheck },
+    {
+      id: 'shift_summary',
+      label: 'Shift Summary & Approval',
+      icon: FileCheck,
+      badge:
+        staffShiftStatus === DailyLogStatus.RETURNED_FOR_REVISION
+          ? 'REVISION'
+          : staffShiftStatus === DailyLogStatus.PENDING_VALIDATION
+          ? 'PENDING'
+          : staffShiftStatus === DailyLogStatus.VALIDATED_AND_LOCKED
+          ? 'LOCKED'
+          : 'DRAFT',
+      badgeColor:
+        staffShiftStatus === DailyLogStatus.RETURNED_FOR_REVISION
+          ? 'bg-rose-600 text-white'
+          : staffShiftStatus === DailyLogStatus.PENDING_VALIDATION
+          ? 'bg-sky-600 text-white'
+          : staffShiftStatus === DailyLogStatus.VALIDATED_AND_LOCKED
+          ? 'bg-emerald-600 text-white'
+          : 'bg-amber-500 text-white',
+    },
   ];
 
   // 2. BRANCH_MANAGER Navigation: Render Store Leadership & Audit Tabs
@@ -135,7 +165,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
       badgeColor: 'bg-emerald-500 text-white',
     },
     { id: 'branch_analytics', label: 'Branch Analytics', icon: TrendingUp },
-    { id: 'transfers', label: 'Inter-Branch Transfers', icon: ArrowLeftRight },
   ];
 
   // 3. SUPER_ADMIN Navigation: Render HQ Executive & Network Tabs
@@ -154,7 +183,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
           : 'bg-[#F37021] text-white',
     },
     { id: 'network_analytics', label: 'Network Predictive Analytics', icon: TrendingUp },
-    { id: 'user_management', label: 'System Administration / RBAC', icon: Users },
     { id: 'master_pricing', label: 'Master Inventory & Pricing', icon: Tag },
   ];
 

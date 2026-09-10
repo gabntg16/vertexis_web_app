@@ -15,20 +15,19 @@ import { AdminLogistics } from './components/admin/AdminLogistics';
 import { AdminSalesHistory } from './components/admin/AdminSalesHistory';
 import { AdminCalendar } from './components/admin/AdminCalendar';
 import { AdminAnnouncements } from './components/admin/AdminAnnouncements';
-import { AdminUserManagement } from './components/admin/AdminUserManagement';
 import { AdminProductPricing } from './components/admin/AdminProductPricing';
 
 // Branch Manager (Store Leadership & Audit) Views
 import { ManagerLogValidation } from './components/branch/ManagerLogValidation';
 import { ManagerRequisitions } from './components/branch/ManagerRequisitions';
 import { ManagerBranchAnalytics } from './components/branch/ManagerBranchAnalytics';
-import { ManagerInterBranchTransfers } from './components/branch/ManagerInterBranchTransfers';
 
 // Branch Staff (Frontline Ground Operations) Views
 import { StaffPhysicalCounts } from './components/branch/StaffPhysicalCounts';
 import { StaffManualSales } from './components/branch/StaffManualSales';
 import { StaffWastageLog } from './components/branch/StaffWastageLog';
 import { StaffInboundReceiving } from './components/branch/StaffInboundReceiving';
+import { StaffShiftSummary } from './components/branch/StaffShiftSummary';
 
 const MainShell: React.FC = () => {
   const { currentUser, themeMode, resetToDefaultData } = useData();
@@ -49,7 +48,7 @@ const MainShell: React.FC = () => {
       );
     } else if (isBranchManager(currentUser)) {
       setActiveTab((prev) =>
-        ['log_validation', 'requisitions', 'orders', 'reorder', 'branch_analytics', 'analytics', 'sales', 'transfers', 'inter_branch'].includes(prev)
+        ['log_validation', 'requisitions', 'orders', 'reorder', 'branch_analytics', 'analytics', 'sales'].includes(prev)
           ? prev
           : 'log_validation'
       );
@@ -61,9 +60,7 @@ const MainShell: React.FC = () => {
           'network_analytics',
           'dashboard',
           'analytics',
-          'user_management',
-          'admin_users',
-          'rbac',
+          'forecasting',
           'master_pricing',
           'pricing',
           'products',
@@ -118,16 +115,25 @@ const MainShell: React.FC = () => {
           {/* TIER 1: BRANCH_STAFF (Frontline Ground Operations) */}
           {isStaff && (
             <>
-              {activeTab === 'physical_counts' && <StaffPhysicalCounts />}
-              {activeTab === 'manual_sales' && <StaffManualSales />}
-              {(activeTab === 'spoilage_wastage' || activeTab === 'wastage') && <StaffWastageLog />}
-              {(activeTab === 'inbound_receiving' || activeTab === 'receiving') && (
-                <StaffInboundReceiving />
+              {activeTab === 'physical_counts' && <StaffPhysicalCounts onNavigateTab={setActiveTab} />}
+              {activeTab === 'manual_sales' && <StaffManualSales onNavigateTab={setActiveTab} />}
+              {(activeTab === 'spoilage_wastage' || activeTab === 'wastage') && (
+                <StaffWastageLog onNavigateTab={setActiveTab} />
               )}
+              {(activeTab === 'inbound_receiving' || activeTab === 'receiving') && (
+                <StaffInboundReceiving onNavigateTab={setActiveTab} />
+              )}
+              {activeTab === 'shift_summary' && <StaffShiftSummary onNavigateTab={setActiveTab} />}
               {/* Fallback route guard: If staff attempts to navigate to any other tab */}
-              {!['physical_counts', 'manual_sales', 'spoilage_wastage', 'wastage', 'inbound_receiving', 'receiving'].includes(
-                activeTab
-              ) && <StaffPhysicalCounts />}
+              {![
+                'physical_counts',
+                'manual_sales',
+                'spoilage_wastage',
+                'wastage',
+                'inbound_receiving',
+                'receiving',
+                'shift_summary',
+              ].includes(activeTab) && <StaffPhysicalCounts onNavigateTab={setActiveTab} />}
             </>
           )}
 
@@ -141,9 +147,6 @@ const MainShell: React.FC = () => {
               {(activeTab === 'branch_analytics' || activeTab === 'analytics' || activeTab === 'sales') && (
                 <ManagerBranchAnalytics onNavigateToReorder={() => setActiveTab('requisitions')} />
               )}
-              {(activeTab === 'transfers' || activeTab === 'inter_branch') && (
-                <ManagerInterBranchTransfers />
-              )}
               {/* Fallback route guard: If manager attempts to navigate to any other tab */}
               {![
                 'log_validation',
@@ -153,8 +156,6 @@ const MainShell: React.FC = () => {
                 'branch_analytics',
                 'analytics',
                 'sales',
-                'transfers',
-                'inter_branch',
               ].includes(activeTab) && <ManagerLogValidation />}
             </>
           )}
@@ -163,11 +164,8 @@ const MainShell: React.FC = () => {
           {isSuper && (
             <>
               {(activeTab === 'requisition_approval' || activeTab === 'orders') && <AdminOrders />}
-              {(activeTab === 'network_analytics' || activeTab === 'analytics' || activeTab === 'dashboard') && (
+              {(activeTab === 'network_analytics' || activeTab === 'analytics' || activeTab === 'dashboard' || activeTab === 'forecasting') && (
                 <AdminDashboard onNavigateTab={setActiveTab} />
-              )}
-              {(activeTab === 'user_management' || activeTab === 'admin_users' || activeTab === 'rbac') && (
-                <AdminUserManagement />
               )}
               {(activeTab === 'master_pricing' || activeTab === 'pricing' || activeTab === 'products') && (
                 <AdminProductPricing />
@@ -185,9 +183,7 @@ const MainShell: React.FC = () => {
                 'network_analytics',
                 'analytics',
                 'dashboard',
-                'user_management',
-                'admin_users',
-                'rbac',
+                'forecasting',
                 'master_pricing',
                 'pricing',
                 'products',

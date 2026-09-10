@@ -23,14 +23,12 @@ import {
   Printer,
   ShieldCheck,
   CreditCard,
+  Package,
 } from 'lucide-react';
 import {
-  jtExpressService,
-  COMMISSARY_SENDER,
-  JTShippingLabelData,
-  resolveDestinationHub,
-} from '../../services/jtExpress';
-import { JTShippingLabel } from '../common/JTShippingLabel';
+  DispatchManifestData,
+  JTShippingLabel,
+} from '../common/JTShippingLabel';
 import { JTTrackingModal } from '../common/JTTrackingModal';
 import { AdminPaymentVerificationQueue } from './AdminPaymentVerificationQueue';
 
@@ -59,9 +57,10 @@ export const AdminOrders: React.FC = () => {
   const [showRejectModal, setShowRejectModal] = useState(false);
   const [rejectionReason, setRejectionReason] = useState('');
   const [showDeliveryModal, setShowDeliveryModal] = useState(false);
-  const [dispatchMethod, setDispatchMethod] = useState<DispatchMethod>('jt_express');
-  const [courierName, setCourierName] = useState('J&T Express Philippines');
+  const [dispatchMethod, setDispatchMethod] = useState<DispatchMethod>('company_driver');
+  const [courierName, setCourierName] = useState('In-House Commissary Fleet');
   const [trackingNumber, setTrackingNumber] = useState('');
+  const [estimatedDeliveryTime, setEstimatedDeliveryTime] = useState('');
   const [deliveryAddress, setDeliveryAddress] = useState('');
   const [receiverName, setReceiverName] = useState('');
   const [receiverPhone, setReceiverPhone] = useState('');
@@ -69,7 +68,7 @@ export const AdminOrders: React.FC = () => {
   const [driverName, setDriverName] = useState('Mang Robert (Fleet Van 01)');
   const [deliveryNotes, setDeliveryNotes] = useState('Keep dry, gourmet marshmallows. Temperature sensitive.');
   const [isSubmittingDispatch, setIsSubmittingDispatch] = useState(false);
-  const [activeLabelData, setActiveLabelData] = useState<JTShippingLabelData | null>(null);
+  const [activeManifestData, setActiveManifestData] = useState<DispatchManifestData | null>(null);
   const [activeTrackingNumber, setActiveTrackingNumber] = useState<string | null>(null);
   const [activeTrackingOrder, setActiveTrackingOrder] = useState<{ id: string; branch: string } | null>(null);
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'info' | 'error' } | null>(null);
@@ -167,117 +166,89 @@ export const AdminOrders: React.FC = () => {
     e.preventDefault();
     if (!selectedOrder) return;
 
-    if (dispatchMethod === 'jt_express') {
-      if (!deliveryAddress || deliveryAddress.trim().length < 5) {
-        showToast('Please enter a complete branch destination address.', 'error');
-        return;
-      }
-      if (!receiverPhone || receiverPhone.trim().length < 7) {
-        showToast('Branch receiver phone number is required for J&T Express delivery.', 'error');
-        return;
-      }
+    const isFleet = dispatchMethod === 'company_driver';
+    const finalCourierName = isFleet ? 'In-House Commissary Fleet' : (courierName || 'J&T Express');
+
+    if (!isFleet && (!trackingNumber || trackingNumber.trim().length === 0)) {
+      showToast('Please enter the Waybill / Tracking Number.', 'error');
+      return;
+    }
+    if (!estimatedDeliveryTime || estimatedDeliveryTime.trim().length === 0) {
+      showToast('Please enter the Estimated Time of Delivery (ETD).', 'error');
+      return;
+    }
+    if (!deliveryAddress || deliveryAddress.trim().length < 5) {
+      showToast('Please enter a complete branch destination address.', 'error');
+      return;
     }
 
     try {
       setIsSubmittingDispatch(true);
 
-      if (dispatchMethod === 'jt_express') {
-        const jtRequest = {
-          orderId: selectedOrder.id,
-          sender: COMMISSARY_SENDER,
-          receiver: {
-            name: receiverName || `${selectedOrder.branchName} Store Manager`,
-            mobile: receiverPhone,
-            phone: receiverPhone,
-            address: deliveryAddress,
-            city: 'Metro Manila',
-            province: 'NCR',
-            branchCode: selectedOrder.branchId,
-            branchName: selectedOrder.branchName,
-          },
-          items: selectedOrder.items.map((it) => ({
-            itemName: it.productName,
-            itemQuantity: it.quantity,
-            itemValue: it.unitPrice || 149,
-            itemWeight: 0.12,
-            englishName: 'Gourmet Marshmallows',
-          })),
-          packageType: 'EXPRESS' as const,
-          serviceType: 'EZ' as const,
+      const cleanTrackingNo =
+        trackingNumber.trim() ||
+        (isFleet ? `TRIP-NGA-${selectedOrder.id}` : `MB-TRACK-${Date.now().toString().slice(-6)}`);
+      const cleanETD = estimatedDeliveryTime.trim();
+
+      createDelivery(
+        selectedOrder.id,
+        deliveryAddress,
+        finalCourierName,
+        cleanTrackingNo,
+        cleanETD,
+        deliveryNotes,
+        {
+          dispatchMethod,
+          waybillNumber: cleanTrackingNo,
+          driverName: isFleet ? driverName : undefined,
+          receiverContact: receiverName || `${selectedOrder.branchName} Manager`,
+          receiverPhone: receiverPhone,
           weightKg: packageWeightKg,
-          declaredValue: selectedOrder.totalAmount,
-          remark: deliveryNotes,
-          isFragile: true,
-          isPerishable: true,
-        };
-
-        const jtResponse = await jtExpressService.createOrder(jtRequest);
-        if (!jtResponse.success || !jtResponse.data) {
-          throw new Error(jtResponse.message || 'J&T Gateway returned an error.');
+          estimatedDeliveryTime: cleanETD,
+          dispatchedProducts: selectedOrder.items,
         }
+      );
 
-        const billCode = jtResponse.data.billCode;
-        const sortingCode = jtResponse.data.sortingCode;
+      const manifestData: DispatchManifestData = {
+        dispatchRef: cleanTrackingNo,
+        orderId: selectedOrder.id,
+        dispatchMethod: dispatchMethod,
+        courierName: finalCourierName,
+        trackingNumber: cleanTrackingNo,
+        waybillNumber: cleanTrackingNo,
+        driverName: isFleet ? driverName : undefined,
+        estimatedDeliveryTime: cleanETD,
+        createdAt: new Date().toISOString(),
+        sender: {
+          companyName: 'The Marsh Bites Enterprise (Central Commissary)',
+          hubName: 'Naga Central Commissary Hub',
+          address: 'Zone 4, Concepcion Pequeña, Naga City, Camarines Sur',
+          contactPerson: 'Commissary Logistics Officer',
+          phone: '+63 917 555 6274',
+        },
+        receiver: {
+          branchName: selectedOrder.branchName,
+          managerName: receiverName || `${selectedOrder.branchName} Store Manager`,
+          phone: receiverPhone,
+          address: deliveryAddress,
+        },
+        items: selectedOrder.items.map((it) => ({
+          itemName: it.productName,
+          quantity: it.quantity,
+          unitValue: it.unitPrice,
+        })),
+        totalPacks: selectedOrder.items.reduce((s, it) => s + it.quantity, 0),
+        declaredValue: selectedOrder.totalAmount,
+        packageWeightKg: packageWeightKg,
+        specialInstructions: deliveryNotes,
+      };
 
-        createDelivery(
-          selectedOrder.id,
-          deliveryAddress,
-          'J&T Express Philippines',
-          billCode,
-          new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString(),
-          deliveryNotes,
-          {
-            dispatchMethod: 'jt_express',
-            waybillNumber: billCode,
-            jtSortingCode: sortingCode,
-            receiverContact: receiverName,
-            receiverPhone: receiverPhone,
-            weightKg: packageWeightKg,
-          }
-        );
-
-        const labelData = jtExpressService.prepareShippingLabel(
-          billCode,
-          selectedOrder.id,
-          jtRequest.receiver,
-          jtRequest.items,
-          {
-            weightKg: packageWeightKg,
-            declaredValue: selectedOrder.totalAmount,
-            serviceType: jtResponse.data.serviceType,
-          }
-        );
-
-        setShowDeliveryModal(false);
-        setActiveLabelData(labelData);
-        showToast(
-          `J&T Waybill ${billCode} generated! Routing Hub: ${sortingCode}`,
-          'success'
-        );
-      } else {
-        const trackingRef = `MB-FLEET-${Date.now().toString().slice(-6)}`;
-        createDelivery(
-          selectedOrder.id,
-          deliveryAddress,
-          'Marsh Bites In-House Fleet',
-          trackingRef,
-          new Date(Date.now() + 1 * 24 * 60 * 60 * 1000).toISOString(),
-          `${deliveryNotes} | Driver: ${driverName}`,
-          {
-            dispatchMethod: 'company_driver',
-            waybillNumber: trackingRef,
-            driverName: driverName,
-            receiverContact: receiverName,
-            receiverPhone: receiverPhone,
-          }
-        );
-
-        setShowDeliveryModal(false);
-        showToast(
-          `Order #${selectedOrder.id} dispatched via In-House Fleet (${driverName})`,
-          'success'
-        );
-      }
+      setShowDeliveryModal(false);
+      setActiveManifestData(manifestData);
+      showToast(
+        `Order #${selectedOrder.id} dispatched via ${finalCourierName}! Ref/Waybill: ${cleanTrackingNo}`,
+        'success'
+      );
     } catch (err: any) {
       showToast(err.message || 'Dispatch creation failed', 'error');
     } finally {
@@ -898,6 +869,11 @@ export const AdminOrders: React.FC = () => {
                           setDeliveryAddress(branch?.address || branch?.location || `${selectedOrder.branchName} Station`);
                           const totalPacks = selectedOrder.items.reduce((s, i) => s + i.quantity, 0);
                           setPackageWeightKg(Math.max(1.5, Math.round(totalPacks * 0.12 * 10) / 10));
+                          setTrackingNumber(selectedOrder.trackingNumber || '');
+                          const defaultETD = new Date(Date.now() + 48 * 3600 * 1000);
+                          const tzOffset = defaultETD.getTimezoneOffset() * 60000;
+                          const localISOTime = new Date(defaultETD.getTime() - tzOffset).toISOString().slice(0, 16);
+                          setEstimatedDeliveryTime(selectedOrder.estimatedDeliveryTime || localISOTime);
                           setShowDeliveryModal(true);
                         }}
                         className={`px-4 py-2 text-xs font-bold rounded-xl shadow-sm transition-colors flex items-center space-x-1.5 ${
@@ -1107,57 +1083,144 @@ export const AdminOrders: React.FC = () => {
             </div>
 
             <form onSubmit={handleCreateDeliverySubmit} className="overflow-y-auto space-y-3.5 text-xs py-3 pr-1">
+              {/* Read-Only Summary of Ordered Stock Package & Products */}
+              <div className="p-3 rounded-2xl bg-neutral-100/90 dark:bg-neutral-900/90 border border-neutral-200 dark:border-neutral-800 space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2">
+                    <Package className="w-3.5 h-3.5 text-[#F37021]" />
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-neutral-500 dark:text-neutral-400">
+                      Dispatched Consignment Manifest (Read-Only)
+                    </span>
+                  </div>
+                  {selectedOrder.packageName && (
+                    <span className="px-2 py-0.5 rounded-full text-[9px] font-black bg-[#F37021]/15 text-[#F37021] border border-[#F37021]/30">
+                      {selectedOrder.packageName}
+                    </span>
+                  )}
+                </div>
+
+                <div className="flex items-center justify-between text-xs font-bold text-neutral-700 dark:text-neutral-300 border-b border-neutral-200/80 dark:border-neutral-800 pb-1.5">
+                  <span>Total Quantity Dispatched:</span>
+                  <span className="text-xs font-black text-emerald-600 dark:text-emerald-400">
+                    {selectedOrder.items.reduce((s, it) => s + it.quantity, 0)} Units (Packs)
+                  </span>
+                </div>
+
+                <div className="max-h-28 overflow-y-auto space-y-1 pr-1 divide-y divide-neutral-200/50 dark:divide-neutral-800/60">
+                  {selectedOrder.items.map((item, idx) => (
+                    <div key={idx} className="flex items-center justify-between text-[11px] pt-1 first:pt-0">
+                      <span className="truncate max-w-[65%] text-neutral-800 dark:text-neutral-200">
+                        {item.productName}
+                      </span>
+                      <span className="font-bold text-neutral-900 dark:text-white shrink-0">
+                        {item.quantity} packs
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
               {/* Courier / Dispatch Method Toggle */}
               <div>
-                <label className="block font-bold uppercase tracking-wider text-neutral-400 mb-1.5">
-                  Courier / Dispatch Method
+                <label className="block font-bold uppercase tracking-wider text-neutral-400 mb-1.5 text-[11px]">
+                  Logistics & Dispatch Method
                 </label>
                 <div className="grid grid-cols-2 gap-2 p-1 rounded-2xl bg-neutral-100 dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800">
                   <button
                     type="button"
                     onClick={() => {
-                      setDispatchMethod('jt_express');
-                      setCourierName('J&T Express Philippines');
+                      setDispatchMethod('company_driver');
+                      setCourierName('In-House Commissary Fleet');
+                      setTrackingNumber(`TRIP-NGA-${selectedOrder.id}`);
                     }}
-                    className={`py-2 px-3 rounded-xl text-xs font-black transition-all flex items-center justify-center space-x-1.5 ${
-                      dispatchMethod === 'jt_express'
-                        ? 'bg-red-600 text-white shadow-md'
+                    className={`py-2 px-3 rounded-xl text-xs font-black transition-all flex items-center justify-center space-x-1.5 cursor-pointer ${
+                      dispatchMethod === 'company_driver'
+                        ? 'bg-[#F37021] text-white shadow-md'
                         : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-white'
                     }`}
                   >
-                    <span className="px-1.5 py-0.5 rounded bg-white text-red-600 text-[10px] font-black">J&T</span>
-                    <span>J&T Express (API)</span>
+                    <Truck className="w-3.5 h-3.5" />
+                    <span>In-House Fleet</span>
                   </button>
 
                   <button
                     type="button"
                     onClick={() => {
-                      setDispatchMethod('company_driver');
-                      setCourierName('Marsh Bites In-House Fleet');
+                      setDispatchMethod('third_party_courier');
+                      setCourierName('J&T Express');
+                      setTrackingNumber('');
                     }}
-                    className={`py-2 px-3 rounded-xl text-xs font-black transition-all flex items-center justify-center space-x-1.5 ${
-                      dispatchMethod === 'company_driver'
-                        ? 'bg-[#80C7F2] text-neutral-900 shadow-md'
+                    className={`py-2 px-3 rounded-xl text-xs font-black transition-all flex items-center justify-center space-x-1.5 cursor-pointer ${
+                      dispatchMethod !== 'company_driver'
+                        ? 'bg-sky-600 text-white shadow-md'
                         : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-white'
                     }`}
                   >
-                    <Truck className="w-3.5 h-3.5" />
-                    <span>Company Fleet</span>
+                    <Package className="w-3.5 h-3.5" />
+                    <span>Third-Party Courier</span>
                   </button>
                 </div>
               </div>
 
-              {/* J&T Express Fields */}
-              {dispatchMethod === 'jt_express' ? (
-                <div className="space-y-3 p-3.5 rounded-2xl bg-red-500/5 border border-red-500/20">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[11px] font-bold text-red-600 dark:text-red-400 uppercase tracking-wider flex items-center space-x-1">
-                      <ShieldCheck className="w-3.5 h-3.5" />
-                      <span>J&T Express Open Platform Auto-Population</span>
-                    </span>
-                    <span className="text-[10px] font-mono text-neutral-400">
-                      Hub: {resolveDestinationHub(deliveryAddress).hubCode}
-                    </span>
+              {/* Courier Partner Selection & Tracking */}
+              {dispatchMethod !== 'company_driver' ? (
+                <div className="space-y-3 p-3.5 rounded-2xl bg-sky-500/5 border border-sky-500/20">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    <div>
+                      <label className="block text-[11px] font-bold text-neutral-800 dark:text-neutral-200 mb-1">
+                        Courier Provider
+                      </label>
+                      <select
+                        value={courierName}
+                        onChange={(e) => setCourierName(e.target.value)}
+                        className={`w-full p-2 rounded-xl text-xs font-bold border focus:outline-none ${
+                          isDark ? 'bg-neutral-800 border-neutral-700 text-white' : 'bg-neutral-50 border-neutral-300 text-neutral-900'
+                        }`}
+                      >
+                        <option value="J&T Express">J&T Express</option>
+                        <option value="LBC Express">LBC Express</option>
+                        <option value="Transportify">Transportify</option>
+                        <option value="Grab Express">Grab Express</option>
+                        <option value="Victory Liner Cargo">Victory Liner Cargo</option>
+                        <option value="Other Courier">Other Courier</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="block text-[11px] font-bold text-neutral-800 dark:text-neutral-200">
+                          Tracking / Waybill No. <span className="text-red-500">*</span>
+                        </label>
+                        <span className="text-[9px] font-bold text-sky-600 dark:text-sky-400 bg-sky-500/10 px-1.5 py-0.5 rounded">
+                          From Waybill
+                        </span>
+                      </div>
+                      <input
+                        type="text"
+                        required
+                        value={trackingNumber}
+                        onChange={(e) => setTrackingNumber(e.target.value)}
+                        placeholder="e.g. 782910384912"
+                        className={`w-full p-2 rounded-xl text-xs font-mono font-bold border focus:outline-none focus:ring-1 focus:ring-sky-500 ${
+                          isDark ? 'bg-neutral-800 border-neutral-700 text-white' : 'bg-neutral-50 border-neutral-300 text-neutral-900'
+                        }`}
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-bold text-neutral-800 dark:text-neutral-200 mb-1">
+                      Estimated Delivery Time (ETD) <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="datetime-local"
+                      required
+                      value={estimatedDeliveryTime}
+                      onChange={(e) => setEstimatedDeliveryTime(e.target.value)}
+                      className={`w-full p-2 rounded-xl text-xs font-medium border focus:outline-none ${
+                        isDark ? 'bg-neutral-800 border-neutral-700 text-white' : 'bg-neutral-50 border-neutral-300 text-neutral-900'
+                      }`}
+                    />
                   </div>
 
                   <div className="grid grid-cols-2 gap-2">
@@ -1168,7 +1231,7 @@ export const AdminOrders: React.FC = () => {
                         required
                         value={receiverName}
                         onChange={(e) => setReceiverName(e.target.value)}
-                        placeholder="Manager Name"
+                        placeholder="Store Manager Name"
                         className={`w-full p-2 rounded-xl text-xs border ${
                           isDark ? 'bg-neutral-900 border-neutral-700 text-white' : 'bg-white border-neutral-300'
                         }`}
@@ -1201,50 +1264,41 @@ export const AdminOrders: React.FC = () => {
                       }`}
                     />
                   </div>
-
-                  <div className="grid grid-cols-2 gap-2">
+                </div>
+              ) : (
+                /* Company Driver Fields */
+                <div className="space-y-3 p-3.5 rounded-2xl bg-[#F37021]/5 border border-[#F37021]/20">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                     <div>
-                      <label className="block text-[10px] font-bold text-neutral-400 mb-1">Package Weight (KG)</label>
+                      <label className="block text-[11px] font-bold text-neutral-400 mb-1">Driver & Vehicle Plate</label>
                       <input
-                        type="number"
-                        step="0.1"
-                        min="0.5"
-                        value={packageWeightKg}
-                        onChange={(e) => setPackageWeightKg(parseFloat(e.target.value) || 1)}
-                        className={`w-full p-2 rounded-xl text-xs border font-mono ${
+                        type="text"
+                        required
+                        value={driverName}
+                        onChange={(e) => setDriverName(e.target.value)}
+                        placeholder="e.g. Mang Robert (BCO-8821)"
+                        className={`w-full p-2 rounded-xl text-xs border ${
                           isDark ? 'bg-neutral-900 border-neutral-700 text-white' : 'bg-white border-neutral-300'
                         }`}
                       />
                     </div>
+
                     <div>
-                      <label className="block text-[10px] font-bold text-neutral-400 mb-1">Declared Value (PHP)</label>
+                      <label className="block text-[11px] font-bold text-neutral-400 mb-1">
+                        Estimated Delivery Time (ETD) <span className="text-red-500">*</span>
+                      </label>
                       <input
-                        type="number"
-                        disabled
-                        value={selectedOrder.totalAmount}
-                        className={`w-full p-2 rounded-xl text-xs border font-mono opacity-80 ${
-                          isDark ? 'bg-neutral-900 border-neutral-700 text-white' : 'bg-neutral-100 border-neutral-300'
+                        type="datetime-local"
+                        required
+                        value={estimatedDeliveryTime}
+                        onChange={(e) => setEstimatedDeliveryTime(e.target.value)}
+                        className={`w-full p-2 rounded-xl text-xs font-medium border focus:outline-none ${
+                          isDark ? 'bg-neutral-800 border-neutral-700 text-white' : 'bg-neutral-50 border-neutral-300 text-neutral-900'
                         }`}
                       />
                     </div>
                   </div>
-                </div>
-              ) : (
-                /* Company Driver Fields */
-                <div className="space-y-3 p-3.5 rounded-2xl bg-sky-500/5 border border-sky-500/20">
-                  <div>
-                    <label className="block text-[11px] font-bold text-neutral-400 mb-1">Driver & Vehicle Plate</label>
-                    <input
-                      type="text"
-                      required
-                      value={driverName}
-                      onChange={(e) => setDriverName(e.target.value)}
-                      placeholder="e.g. Mang Robert (BCO-8821)"
-                      className={`w-full p-2.5 rounded-xl border ${
-                        isDark ? 'bg-neutral-900 border-neutral-700 text-white' : 'bg-white border-neutral-300'
-                      }`}
-                    />
-                  </div>
+
                   <div>
                     <label className="block text-[11px] font-bold text-neutral-400 mb-1">Destination Address</label>
                     <input
@@ -1252,7 +1306,7 @@ export const AdminOrders: React.FC = () => {
                       required
                       value={deliveryAddress}
                       onChange={(e) => setDeliveryAddress(e.target.value)}
-                      className={`w-full p-2.5 rounded-xl border ${
+                      className={`w-full p-2 rounded-xl text-xs border ${
                         isDark ? 'bg-neutral-900 border-neutral-700 text-white' : 'bg-white border-neutral-300'
                       }`}
                     />
@@ -1261,7 +1315,7 @@ export const AdminOrders: React.FC = () => {
               )}
 
               <div>
-                <label className="block font-bold text-neutral-400 mb-1">
+                <label className="block font-bold text-neutral-400 mb-1 text-xs">
                   Handling Instructions
                 </label>
                 <textarea
@@ -1269,7 +1323,7 @@ export const AdminOrders: React.FC = () => {
                   value={deliveryNotes}
                   onChange={(e) => setDeliveryNotes(e.target.value)}
                   placeholder="Keep dry, perishable marshmallows..."
-                  className={`w-full p-2.5 rounded-xl border ${
+                  className={`w-full p-2.5 rounded-xl border text-xs ${
                     isDark ? 'bg-neutral-900 border-neutral-700 text-white' : 'bg-white border-neutral-300'
                   }`}
                 />
@@ -1279,33 +1333,24 @@ export const AdminOrders: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setShowDeliveryModal(false)}
-                  className="px-3.5 py-2 font-medium rounded-xl border border-neutral-300 dark:border-neutral-700"
+                  className="px-3.5 py-2 font-medium rounded-xl border border-neutral-300 dark:border-neutral-700 text-xs cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={isSubmittingDispatch}
-                  className={`px-4 py-2 font-bold rounded-xl text-white transition-all shadow-md flex items-center space-x-1.5 ${
-                    dispatchMethod === 'jt_express'
-                      ? 'bg-red-600 hover:bg-red-700'
-                      : 'bg-[#F37021] hover:bg-[#d85e15]'
-                  } ${isSubmittingDispatch ? 'opacity-70 cursor-not-allowed' : ''}`}
+                  className="px-4 py-2 font-bold rounded-xl text-white bg-[#F37021] hover:bg-[#d85e15] transition-all shadow-md flex items-center space-x-1.5 text-xs cursor-pointer"
                 >
                   {isSubmittingDispatch ? (
                     <>
                       <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                      <span>Generating Waybill...</span>
-                    </>
-                  ) : dispatchMethod === 'jt_express' ? (
-                    <>
-                      <Zap className="w-3.5 h-3.5" />
-                      <span>Generate J&T Waybill & Dispatch</span>
+                      <span>Saving Dispatch...</span>
                     </>
                   ) : (
                     <>
                       <Truck className="w-3.5 h-3.5" />
-                      <span>Confirm Fleet Dispatch</span>
+                      <span>Confirm Dispatch & Print Gate Pass</span>
                     </>
                   )}
                 </button>
@@ -1315,7 +1360,7 @@ export const AdminOrders: React.FC = () => {
         </div>
       )}
 
-      {/* J&T Tracking Modal */}
+      {/* Delivery Details Modal */}
       {activeTrackingNumber && (
         <JTTrackingModal
           trackingNumber={activeTrackingNumber}
@@ -1329,11 +1374,11 @@ export const AdminOrders: React.FC = () => {
         />
       )}
 
-      {/* J&T Shipping Label Modal */}
-      {activeLabelData && (
+      {/* Printable Dispatch Manifest Modal */}
+      {activeManifestData && (
         <JTShippingLabel
-          labelData={activeLabelData}
-          onClose={() => setActiveLabelData(null)}
+          labelData={activeManifestData}
+          onClose={() => setActiveManifestData(null)}
         />
       )}
         </>

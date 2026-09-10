@@ -15,14 +15,19 @@ export enum UserRole {
 
 export type RoleType = 'SUPER_ADMIN' | 'BRANCH_MANAGER' | 'BRANCH_STAFF';
 
-// Daily Shift Log Status Lifecycle: DRAFT -> PENDING_VALIDATION -> VALIDATED_AND_LOCKED
+// Daily Shift Log Status Lifecycle: DRAFT -> PENDING_VALIDATION -> VALIDATED_AND_LOCKED (or RETURNED_FOR_REVISION)
 export enum DailyLogStatus {
   DRAFT = 'DRAFT',
   PENDING_VALIDATION = 'PENDING_VALIDATION',
   VALIDATED_AND_LOCKED = 'VALIDATED_AND_LOCKED',
+  RETURNED_FOR_REVISION = 'RETURNED_FOR_REVISION',
 }
 
-export type DailyLogStatusType = 'DRAFT' | 'PENDING_VALIDATION' | 'VALIDATED_AND_LOCKED';
+export type DailyLogStatusType =
+  | 'DRAFT'
+  | 'PENDING_VALIDATION'
+  | 'VALIDATED_AND_LOCKED'
+  | 'RETURNED_FOR_REVISION';
 
 export interface UserModel {
   id: string;
@@ -186,7 +191,7 @@ export interface OrderItem {
 export type OrderStatus = 'pending' | 'waitingApproval' | 'approved' | 'rejected' | 'dispatched' | 'completed';
 export type ProductionStage = 'queued' | 'in_kettle' | 'curing' | 'packaged' | 'ready_for_dispatch';
 
-export type DispatchMethod = 'company_driver' | 'jt_express';
+export type DispatchMethod = 'company_driver' | 'third_party_courier' | 'jt_express';
 
 export interface Order {
   id: string;
@@ -206,8 +211,16 @@ export interface Order {
   isArchived?: boolean;
   isDispatched?: boolean;
   dispatchMethod?: DispatchMethod;
+  courierName?: string;
+  driverName?: string;
+  driverPhone?: string;
+  vehiclePlateNo?: string;
   waybillNumber?: string;
   trackingNumber?: string;
+  estimatedDeliveryTime?: string; // ETD entered by Admin during dispatch
+  dispatchedProducts?: OrderItem[]; // Itemized products and quantities confirmed at dispatch
+  dispatchedAt?: string;
+  dispatchNotes?: string;
   receivedAt?: string;
   completedAt?: string;
   paymentMethod?: DigitalPaymentMethod | string;
@@ -731,7 +744,7 @@ export interface DailyPhysicalCountItem {
   productId: string;
   productName: string;
   flavor: string;
-  category: 'marshmallows' | 'flavorings' | 'packaging';
+  category?: 'marshmallows';
   beginningCount: number;
   endingCount: number;
   unit: string;
@@ -791,6 +804,9 @@ export interface DailyShiftLog {
   validatedAt?: string;
   lockedAt?: string;
   managerNotes?: string;
+  rejectionReason?: string;
+  rejectedBy?: string;
+  rejectedAt?: string;
   totalSalesUnits: number;
   totalSalesRevenue: number;
   totalSpoilageUnits: number;

@@ -16,6 +16,8 @@ import {
   Calendar,
   Layers,
   ArrowRight,
+  RotateCcw,
+  XCircle,
 } from 'lucide-react';
 import { DailyLogStatus, DailyShiftLog } from '../../types';
 
@@ -25,6 +27,7 @@ export const ManagerLogValidation: React.FC = () => {
     currentBranch,
     dailyShiftLogs,
     validateAndLockDailyLog,
+    rejectAndReturnDailyLog,
     themeMode,
   } = useData();
 
@@ -45,6 +48,7 @@ export const ManagerLogValidation: React.FC = () => {
   });
 
   const [managerNotes, setManagerNotes] = useState<string>('');
+  const [rejectionReason, setRejectionReason] = useState<string>('');
   const [feedback, setFeedback] = useState<{ text: string; type: 'success' | 'info' | 'error' } | null>(null);
 
   const selectedLog = useMemo(() => {
@@ -53,6 +57,7 @@ export const ManagerLogValidation: React.FC = () => {
 
   const isLocked = selectedLog?.status === DailyLogStatus.VALIDATED_AND_LOCKED;
   const isPending = selectedLog?.status === DailyLogStatus.PENDING_VALIDATION;
+  const isReturned = selectedLog?.status === DailyLogStatus.RETURNED_FOR_REVISION;
 
   const handleApproveAndLock = () => {
     if (!selectedLog) return;
@@ -70,6 +75,29 @@ export const ManagerLogValidation: React.FC = () => {
       setTimeout(() => setFeedback(null), 5000);
     } else {
       setFeedback({ text: res.error || 'Failed to approve log.', type: 'error' });
+    }
+  };
+
+  const handleDisapproveAndReturn = () => {
+    if (!selectedLog) return;
+    if (!rejectionReason.trim()) {
+      setFeedback({
+        text: 'Please enter a revision reason so staff understands what needs recount or correction.',
+        type: 'error',
+      });
+      return;
+    }
+
+    const res = rejectAndReturnDailyLog(selectedLog.id, rejectionReason.trim());
+    if (res.success) {
+      setFeedback({
+        text: `Shift Log (${selectedLog.date}) has been returned to frontline staff for revision.`,
+        type: 'info',
+      });
+      setRejectionReason('');
+      setTimeout(() => setFeedback(null), 5000);
+    } else {
+      setFeedback({ text: res.error || 'Failed to return log.', type: 'error' });
     }
   };
 
@@ -148,6 +176,11 @@ export const ManagerLogValidation: React.FC = () => {
                         Needs Audit
                       </span>
                     )}
+                    {log.status === DailyLogStatus.RETURNED_FOR_REVISION && (
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800 dark:bg-rose-950/60 dark:text-rose-300 border border-rose-300">
+                        Returned
+                      </span>
+                    )}
                     {log.status === DailyLogStatus.VALIDATED_AND_LOCKED && (
                       <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-300">
                         Locked
@@ -185,6 +218,8 @@ export const ManagerLogValidation: React.FC = () => {
             <div className={`p-5 rounded-2xl border ${
               isLocked
                 ? 'bg-emerald-50/50 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-800/60'
+                : isReturned
+                ? 'bg-rose-50/70 dark:bg-rose-950/30 border-rose-200 dark:border-rose-800/60'
                 : isPending
                 ? 'bg-sky-50/70 dark:bg-sky-950/30 border-sky-200 dark:border-sky-800/60'
                 : 'bg-amber-50/70 dark:bg-amber-950/30 border-amber-200 dark:border-amber-800/60'
@@ -194,6 +229,8 @@ export const ManagerLogValidation: React.FC = () => {
                   <div className="flex items-center space-x-2">
                     {isLocked ? (
                       <Lock className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
+                    ) : isReturned ? (
+                      <RotateCcw className="w-5 h-5 text-rose-600 dark:text-rose-400" />
                     ) : (
                       <Clock className="w-5 h-5 text-sky-600 dark:text-sky-400" />
                     )}
@@ -218,6 +255,16 @@ export const ManagerLogValidation: React.FC = () => {
                         By {selectedLog.validatedBy || 'Manager'}
                       </div>
                     </div>
+                  ) : isReturned ? (
+                    <div className="text-right">
+                      <span className="inline-flex items-center space-x-1 px-3 py-1 rounded-full text-xs font-bold bg-rose-600 text-white">
+                        <RotateCcw className="w-3.5 h-3.5" />
+                        <span>RETURNED FOR REVISION</span>
+                      </span>
+                      <div className="text-[11px] text-rose-600 dark:text-rose-400 mt-1 font-semibold">
+                        Awaiting staff correction & re-submit
+                      </div>
+                    </div>
                   ) : isPending ? (
                     <span className="inline-flex items-center space-x-1 px-3 py-1 rounded-full text-xs font-bold bg-sky-600 text-white">
                       <span>READY FOR MANAGER APPROVAL</span>
@@ -229,6 +276,22 @@ export const ManagerLogValidation: React.FC = () => {
                   )}
                 </div>
               </div>
+
+              {selectedLog.rejectionReason && (
+                <div className="mt-3 pt-3 border-t border-rose-200 dark:border-rose-800 text-xs text-rose-800 dark:text-rose-200 bg-rose-100/50 dark:bg-rose-950/40 p-3 rounded-xl">
+                  <div className="font-bold flex items-center space-x-1.5 text-rose-900 dark:text-rose-100 mb-1">
+                    <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                    <span>Manager Disapproval / Revision Instructions Sent to Staff:</span>
+                  </div>
+                  <p className="font-mono text-xs">{selectedLog.rejectionReason}</p>
+                  {selectedLog.rejectedAt && (
+                    <div className="text-[11px] text-neutral-500 mt-1">
+                      Returned by {selectedLog.rejectedBy || 'Store Manager'} on{' '}
+                      {new Date(selectedLog.rejectedAt).toLocaleString()}
+                    </div>
+                  )}
+                </div>
+              )}
 
               {selectedLog.managerNotes && (
                 <div className="mt-3 pt-3 border-t border-emerald-200/60 dark:border-emerald-800/40 text-xs text-neutral-700 dark:text-neutral-300">
@@ -341,38 +404,102 @@ export const ManagerLogValidation: React.FC = () => {
               </div>
             </div>
 
-            {/* Manager Approval & Lock Card */}
+            {/* Manager Audit Decisions & Actions Card */}
             {!isLocked && (
               <div className="p-5 rounded-2xl bg-white dark:bg-[#181818] border border-neutral-200 dark:border-neutral-800 shadow-xs space-y-4">
-                <div className="flex items-center space-x-2">
-                  <ShieldCheck className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
-                  <h3 className="font-bold text-sm text-neutral-900 dark:text-white">
-                    Manager Audit Sign-off & Lock Action
-                  </h3>
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-neutral-200/80 dark:border-neutral-800 pb-3">
+                  <div className="flex items-center space-x-2">
+                    <ShieldCheck className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
+                    <div>
+                      <h3 className="font-bold text-sm text-neutral-900 dark:text-white">
+                        Store Manager Audit Decisions & Actions
+                      </h3>
+                      <p className="text-[11px] text-neutral-500">
+                        Verify shift records or return to frontline staff for physical recount
+                      </p>
+                    </div>
+                  </div>
+                  <span className={`px-2.5 py-1 rounded-full text-[11px] font-bold self-start sm:self-center ${
+                    isReturned
+                      ? 'bg-rose-100 text-rose-800 dark:bg-rose-950/60 dark:text-rose-300'
+                      : isPending
+                      ? 'bg-sky-100 text-sky-800 dark:bg-sky-950/60 dark:text-sky-300'
+                      : 'bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300'
+                  }`}>
+                    {selectedLog.status.replace(/_/g, ' ')}
+                  </span>
                 </div>
 
-                <div>
-                  <label className="block text-xs font-bold text-neutral-700 dark:text-neutral-300 mb-1">
-                    Store Manager Audit Remarks
-                  </label>
-                  <input
-                    type="text"
-                    value={managerNotes}
-                    onChange={(e) => setManagerNotes(e.target.value)}
-                    placeholder="e.g. Physical inventory and cash drawer totals cross-checked against staff log. Approved."
-                    className="w-full px-3 py-2 text-xs rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-[#121212] text-neutral-900 dark:text-white focus:ring-2 focus:ring-[#80C7F2]"
-                  />
-                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
+                  {/* Option A: APPROVE & LOCK */}
+                  <div className="p-4 rounded-xl border border-emerald-200/90 dark:border-emerald-800/60 bg-emerald-50/40 dark:bg-emerald-950/15 flex flex-col justify-between space-y-3">
+                    <div>
+                      <div className="flex items-center space-x-2 text-emerald-700 dark:text-emerald-400 font-bold text-xs">
+                        <CheckCircle2 className="w-4 h-4" />
+                        <span>Action A: Approve & Lock Shift</span>
+                      </div>
+                      <p className="text-[11px] text-neutral-600 dark:text-neutral-400 mt-1">
+                        Locks physical counts, manual sales, and wastage. Syncs validated daily figures to Naga City Commissary Hub.
+                      </p>
 
-                <div className="flex items-center justify-end space-x-3 pt-2">
-                  <button
-                    type="button"
-                    onClick={handleApproveAndLock}
-                    className="flex items-center space-x-2 px-6 py-2.5 rounded-xl text-xs sm:text-sm font-bold text-white bg-emerald-600 hover:bg-emerald-700 active:scale-98 shadow-sm transition-all cursor-pointer"
-                  >
-                    <Lock className="w-4 h-4" />
-                    <span>Approve & Lock Daily Shift Log</span>
-                  </button>
+                      <div className="mt-3">
+                        <label className="block text-[11px] font-bold text-neutral-700 dark:text-neutral-300 mb-1">
+                          Manager Approval Remarks (Optional)
+                        </label>
+                        <input
+                          type="text"
+                          value={managerNotes}
+                          onChange={(e) => setManagerNotes(e.target.value)}
+                          placeholder="e.g. Physical counts and cash drawer verified."
+                          className="w-full px-3 py-2 text-xs rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-[#121212] text-neutral-900 dark:text-white focus:ring-2 focus:ring-emerald-500"
+                        />
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={handleApproveAndLock}
+                      className="w-full flex items-center justify-center space-x-2 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-bold text-white bg-emerald-600 hover:bg-emerald-700 active:scale-98 shadow-sm transition-all cursor-pointer"
+                    >
+                      <Lock className="w-4 h-4" />
+                      <span>Approve & Lock Daily Shift Log</span>
+                    </button>
+                  </div>
+
+                  {/* Option B: DISAPPROVE & RETURN TO STAFF */}
+                  <div className="p-4 rounded-xl border border-rose-200/90 dark:border-rose-800/60 bg-rose-50/40 dark:bg-rose-950/15 flex flex-col justify-between space-y-3">
+                    <div>
+                      <div className="flex items-center space-x-2 text-rose-700 dark:text-rose-400 font-bold text-xs">
+                        <RotateCcw className="w-4 h-4" />
+                        <span>Action B: Disapprove & Return to Staff</span>
+                      </div>
+                      <p className="text-[11px] text-neutral-600 dark:text-neutral-400 mt-1">
+                        Rejects this log and re-enables editable fields on staff screens. Frontline staff will see your exact feedback banner and must re-submit.
+                      </p>
+
+                      <div className="mt-3">
+                        <label className="block text-[11px] font-bold text-rose-700 dark:text-rose-400 mb-1">
+                          Disapproval Reason / Recount Instructions <span className="text-rose-600">*</span>
+                        </label>
+                        <input
+                          type="text"
+                          value={rejectionReason}
+                          onChange={(e) => setRejectionReason(e.target.value)}
+                          placeholder="e.g. Recount Oreo packs: variance is -4, please re-tally shelf."
+                          className="w-full px-3 py-2 text-xs rounded-xl border border-rose-300 dark:border-rose-700 bg-white dark:bg-[#121212] text-neutral-900 dark:text-white focus:ring-2 focus:ring-rose-500"
+                        />
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={handleDisapproveAndReturn}
+                      className="w-full flex items-center justify-center space-x-2 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-bold text-white bg-rose-600 hover:bg-rose-700 active:scale-98 shadow-sm transition-all cursor-pointer"
+                    >
+                      <RotateCcw className="w-4 h-4" />
+                      <span>Disapprove & Return for Revision</span>
+                    </button>
+                  </div>
                 </div>
               </div>
             )}

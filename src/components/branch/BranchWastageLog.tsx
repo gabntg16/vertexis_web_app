@@ -79,7 +79,7 @@ export const BranchWastageLog: React.FC = () => {
   const [reasonFilter, setReasonFilter] = useState<string>('all');
   const [sortBy, setSortBy] = useState<'date_desc' | 'date_asc' | 'qty_desc' | 'cost_desc'>('date_desc');
 
-  const showFeedback不易 = (text: string, type: 'success' | 'info' | 'error' = 'success') => {
+  const showFeedback = (text: string, type: 'success' | 'info' | 'error' = 'success') => {
     setFeedbackMsg({ text, type });
     setTimeout(() => setFeedbackMsg(null), 5000);
   };
@@ -122,12 +122,12 @@ export const BranchWastageLog: React.FC = () => {
     if (!currentBranch || !selectedProduct) return;
 
     if (quantity <= 0) {
-      showFeedback不易('Quantity must be greater than 0.', 'error');
+      showFeedback('Quantity must be greater than 0.', 'error');
       return;
     }
 
     if (quantity > currentItemStock) {
-      showFeedback不易(
+      showFeedback(
         `Cannot record ${quantity} spoiled packs. Current on-hand stock is only ${currentItemStock} units.`,
         'error'
       );
@@ -149,7 +149,7 @@ export const BranchWastageLog: React.FC = () => {
         notes: notes.trim() || undefined,
       });
 
-      showFeedback不易(
+      showFeedback(
         `Successfully recorded ${record.quantity} packs of ${record.flavor} as spoilage. Stock deducted and excluded from predictive demand forecasting.`,
         'success'
       );
@@ -157,7 +157,7 @@ export const BranchWastageLog: React.FC = () => {
       setBatchCode('');
       setNotes('');
     } catch (err: any) {
-      showFeedback不易(err.message || 'Failed to record spoilage', 'error');
+      showFeedback(err.message || 'Failed to record spoilage', 'error');
     }
   };
 
